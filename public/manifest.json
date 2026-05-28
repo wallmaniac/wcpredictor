@@ -1,0 +1,22 @@
+{
+  "name": "Football PredictorZ",
+  "short_name": "PredictorZ",
+  "description": "Football match predictions game",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#09090e",
+  "theme_color": "#ffd700",
+  "icons": [
+    {
+      "src": "/icon-192.png?v=4",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png?v=4",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

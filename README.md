@@ -8,11 +8,11 @@ A premium, feature-rich Progressive Web Application (PWA) built for sports tourn
 
 **PredictorZ** turns sports viewership into a highly engaging, gamified social experience. Rather than acting as a passive spectator, users become active participants in the tournament's narrative. 
 
-### Key Business Goals:
+### Key Project Goals:
 1. **Maximize Engagement**: High-frequency user touchpoints around every matchday via real-time point adjustments.
-2. **Community Virality**: User-created private leagues drive organic growth as friends and colleagues invite each other.
+2. **Community Virality**: User-created private leagues drive organic growth as friends and colleagues invite each other to play.
 3. **Fair and Secure Play**: A strict lock-in mechanism prevents prediction copy-cats, maintaining the integrity of the leaderboard.
-4. **Monetization Potential**: Dynamic support for league entry fees, automated platform fee collection (e.g., 10%), and prize distribution management.
+4. **Purely Social Competition**: A free-to-play model focused entirely on fun, bragging rights, and friendly rivalry.
 
 ---
 
@@ -58,10 +58,10 @@ Locked in before the first match kicks off:
 ### 3. Social Leagues
 * **Private & Public Leagues**: Users can search for and join leagues, or create their own.
 * **Admin Approval**: League creators approve or deny join requests.
-* **Financial Layer**: For paid leagues, creators track entry payments, which are subject to a platform-level fee, showing the net prize pool and payout splits (e.g., 70% for 1st, 20% for 2nd, 10% for 3rd).
+* **League Standing**: Within each league, there's a separate mini-leaderboard showing local rankings and bragging rights among members.
 
 ### 4. Tracking Standings
-* **Leaderboard Tab**: Filter by A-Z sorted leagues or view global standings. stand-out analytics panels show user statistics (exact match rates, win/draw/loss distribution).
+* **Leaderboard Tab**: Filter by A-Z sorted leagues or view global standings. Stand-out analytics panels show user statistics (exact match rates, win/draw/loss distribution).
 * **Live Projected standings**: During active games, the leaderboard calculates a **Projected Standing** in real time. Standard indicators show "+3 live" or "+1 live" badge modifications based on active scorelines.
 * **Live Stats**: Group standings, player statistics (goals, assists, clean sheets), and live match events sync dynamically.
 
@@ -78,13 +78,12 @@ PredictorZ delivers positive social value across multiple vectors:
 1. **Building Community & Social Cohesion**: Brings groups of colleagues, families, and digital communities together. Sports events become conversational focal points, driving healthy, non-destructive social connection.
 2. **Promoting Sportsmanship & Enthusiasm**: Boosts broad engagement in international tournaments. Fans pay closer attention to lesser-known teams and fixtures because their prediction league remains active.
 3. **Cognitive Engagement & Analytical Thinking**: Users engage in analytical reasoning, factoring in team forms, histories, player injuries, and statistical likelihoods. It makes fans active analysts rather than passive content consumers.
-4. **Platform for Charity & Fundraising**: The league structures make it easy for groups to coordinate charity pools, where the entry fees go to a chosen social cause, gamifying philanthropic donations.
 
 ---
 
 ## 💻 Tech Stack & Architecture
 
-* **Frontend**: React + Vite (HTML5, Tailwind CSS/Vanilla CSS, Mobile-first responsive UI).
+* **Frontend**: React + Vite (HTML5, Vanilla CSS, Mobile-first responsive UI).
 * **Realtime Database**: Firebase Realtime Database (handles lightning-fast synchronization of live match minutes, events, and score changes directly to client-side views).
 * **Authentication**: Firebase Authentication.
 * **Hosting**: Firebase Hosting (optimized for fast edge delivery, installable as a Progressive Web App (PWA)).

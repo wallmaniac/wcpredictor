@@ -78,6 +78,7 @@ export default function Leaderboard() {
         exact: isWC ? (u.exactScores || 0) : 0, correct: isWC ? (u.correctResults || 0) : 0,
         matchPoints: isWC ? (u.matchPoints || 0) : 0,
         globalPickPoints: isWC ? (u.globalPickPoints || 0) : 0,
+        hidden: u.hidden === true,
       })));
     });
     let u1b = () => {};
@@ -114,7 +115,8 @@ export default function Leaderboard() {
     return () => { u1(); u1b(); u2(); u3(); u4(); u4b(); u5(); window.removeEventListener('select-league', h); };
   }, [fbPath, isWC, currentUser]);
 
-  const sorted = [...users].sort((a, b) => b.points !== a.points ? b.points - a.points : b.exact - a.exact);
+  const visibleUsers = users.filter(u => !u.hidden || u.uid === currentUser?.uid || isAdmin);
+  const sorted = [...visibleUsers].sort((a, b) => b.points !== a.points ? b.points - a.points : b.exact - a.exact);
   let filtered = sorted;
   if (selectedLeague !== 'all') {
     const league = leagues[selectedLeague];
@@ -533,6 +535,7 @@ export default function Leaderboard() {
                     </td>
                     <td style={{ padding: '10px 8px', fontWeight: 'bold', fontSize: '0.88rem' }}>
                       {u.flag} {u.name}
+                      {u.hidden && isAdmin && <span style={{ marginLeft: '6px', fontSize: '0.78rem', color: '#ff5555' }} title="Hidden from other users">👻</span>}
                       {!canView && !isSelf && <span style={{ marginLeft: '6px', fontSize: '0.6rem', color: 'var(--text-muted)' }}>🔒</span>}
                     </td>
                     <td style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem', color: 'var(--primary)' }}>

@@ -74,9 +74,9 @@ export default function AdminPanel() {
   // League assignment
   const [assignLeague, setAssignLeague] = useState('');
   // Entry fee for league creation
-  const [newLeagueFee, setNewLeagueFee] = useState('0');
+  const [newLeagueFee, setNewLeagueFee] = useState('20');
   const [newLeagueCurrency, setNewLeagueCurrency] = useState('EUR');
-  const [newLeaguePrizes, setNewLeaguePrizes] = useState('50,30,20');
+  const [newLeaguePrizes, setNewLeaguePrizes] = useState('100');
   const [assignUser, setAssignUser] = useState('');
   // User detail modal
   const [selectedUser, setSelectedUser] = useState(null); // { uid, data }
@@ -84,6 +84,7 @@ export default function AdminPanel() {
   const [editTZ, setEditTZ] = useState('');
   const [adminMemberSearch, setAdminMemberSearch] = useState('');
   const [editName, setEditName] = useState('');
+  const [editHidden, setEditHidden] = useState(false);
   const [loadingUser, setLoadingUser] = useState(false);
   const [userViewComp, setUserViewComp] = useState('wc2026');
   const [predFilter, setPredFilter] = useState('predicted');
@@ -254,11 +255,11 @@ export default function AdminPanel() {
       createdBy: currentUser.uid, createdByName: users[currentUser.uid]?.displayName || currentUser.email,
       createdAt: Date.now(), members: { [currentUser.uid]: true },
       entryFee: fee, currency: newLeagueCurrency,
-      platformFeePercent: 10,
+      platformFeePercent: 0,
       prizeDistribution,
       payments: {}
     });
-    setNewLeagueName(''); setNewLeagueDesc(''); setNewLeagueFee('0'); setNewLeaguePrizes('50,30,20');
+    setNewLeagueName(''); setNewLeagueDesc(''); setNewLeagueFee('20'); setNewLeaguePrizes('100');
     showMsg(`✅ ${t('leagueCreated')}`);
   };
 
@@ -289,10 +290,8 @@ export default function AdminPanel() {
     if (fee === 0) return null;
     const paidCount = league.payments ? Object.values(league.payments).filter(p => p.status === 'confirmed').length : 0;
     const gross = fee * paidCount;
-    const processorFee = gross * 0.029 + (paidCount * 0.25); // ~Stripe estimate
-    const platformFee = gross * ((league.platformFeePercent || 10) / 100);
-    const net = Math.max(0, gross - processorFee - platformFee);
-    return { gross, processorFee, platformFee, net, paidCount, currency: league.currency || 'EUR' };
+    const net = gross;
+    return { gross, processorFee: 0, platformFee: 0, net, paidCount, currency: league.currency || 'EUR' };
   };
 
   // API Key
@@ -387,6 +386,7 @@ export default function AdminPanel() {
     setSelectedUser({ uid, data });
     setEditName(data?.displayName || '');
     setEditTZ(data?.timezone || '');
+    setEditHidden(data?.hidden === true);
     setUserViewComp(competition.id);
     setPredFilter('predicted');
     setPredSearch('');
@@ -414,7 +414,12 @@ export default function AdminPanel() {
     if (!selectedUser) return;
     await update(ref(database, `wc2026/users/${selectedUser.uid}`), {
       displayName: editName.trim(), timezone: editTZ,
+      hidden: editHidden,
     });
+    setSelectedUser(prev => prev && prev.uid === selectedUser.uid ? {
+      ...prev,
+      data: { ...prev.data, displayName: editName.trim(), timezone: editTZ, hidden: editHidden }
+    } : prev);
     showMsg(lang === 'hr' ? `✅ Profil ažuriran za ${editName}` : `✅ Profile updated for ${editName}`);
   };
 
@@ -624,7 +629,7 @@ export default function AdminPanel() {
                     const lockCount = allUserLocks[uid] ? Object.keys(allUserLocks[uid]).length : 0;
                     return (
                       <tr key={uid} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer' }} onClick={() => handleOpenUser(uid)}>
-                        <td style={{ padding: '8px 4px' }}>{user.flag || '🌍'} <b>{user.displayName || 'Unknown'}</b></td>
+                        <td style={{ padding: '8px 4px' }}>{user.flag || '🌍'} <b>{user.displayName || 'Unknown'}</b>{user.hidden && <span style={{ marginLeft: '6px', fontSize: '0.78rem', color: '#ff5555' }} title="Hidden from other users">👻</span>}</td>
                         <td style={{ padding: '8px 4px', color: 'var(--text-muted)', fontSize: '0.8rem' }}>{user.email}</td>
                         <td style={{ padding: '8px 4px', textAlign: 'center' }}>
                           {isSuper && <span style={{ background: 'rgba(255,215,0,0.15)', color: 'gold', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem' }}>👑 Super</span>}
@@ -702,7 +707,7 @@ export default function AdminPanel() {
                   return (
                     <div key={uid} className="user-card-mobile" onClick={() => handleOpenUser(uid)} style={{ cursor: 'pointer' }}>
                       <div className="user-card-info">
-                        <div style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{user.flag || '🌍'} {user.displayName || 'Unknown'}</div>
+                        <div style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{user.flag || '🌍'} {user.displayName || 'Unknown'}{user.hidden && <span style={{ marginLeft: '6px', fontSize: '0.78rem', color: '#ff5555' }} title="Hidden from other users">👻</span>}</div>
                         <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>{user.email}</div>
                         <div style={{ marginTop: '3px', display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
                           {isSuper && <span style={{ background: 'rgba(255,215,0,0.15)', color: 'gold', padding: '1px 6px', borderRadius: '4px', fontSize: '0.65rem' }}>👑 Super</span>}
@@ -750,19 +755,16 @@ export default function AdminPanel() {
               </div>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', flex: 1 }}>
                 <label style={{ color: 'var(--text-muted)', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>🏆 {t('splitPct')}:</label>
-                <input className="input-glass" placeholder="50,30,20" value={newLeaguePrizes} onChange={e => setNewLeaguePrizes(e.target.value)} style={{ flex: 1, minWidth: '80px' }} />
+                <input className="input-glass" placeholder="100" value={newLeaguePrizes} onChange={e => setNewLeaguePrizes(e.target.value)} style={{ flex: 1, minWidth: '80px' }} />
               </div>
               <button onClick={handleCreateLeague} className="btn-primary" style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>➕ {t('createLeague')}</button>
             </div>
             {parseFloat(newLeagueFee) > 0 && (
               <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', padding: '8px 12px', borderRadius: '6px' }}>
                 {lang === 'hr' ? (
-                  `ℹ️ 10% naknade platforme + ~3% naknade procesora oduzima se od nagradnog fonda. Raspodjela nagrada: ${newLeaguePrizes.split(',').map((p, i) => `${i + 1}.: ${p.trim()}%`).join(', ')}`
+                  `ℹ️ Sav prikupljeni iznos (${newLeagueFee} ${newLeagueCurrency} po sudioniku) ide pobjedniku (Pobjednik uzima sve). Nema nikakvih administrativnih naknada.`
                 ) : (
-                  `ℹ️ 10% platform fee + ~3% processor fee deducted from prize pool. Prize split: ${newLeaguePrizes.split(',').map((p, i) => {
-                    const suf = i === 0 ? 'st' : i === 1 ? 'nd' : i === 2 ? 'rd' : 'th';
-                    return `${i + 1}${suf}: ${p.trim()}%`;
-                  }).join(', ')}`
+                  `ℹ️ All collected entry fees (${newLeagueFee} ${newLeagueCurrency} per participant) are awarded to the winner (Winner Takes All). No admin or platform fees are deducted.`
                 )}
               </div>
             )}
@@ -1063,6 +1065,12 @@ export default function AdminPanel() {
                           <option key={tz.value} value={tz.value}>{tz.label.replace(/_/g,' ')} (GMT{tz.offset === '0' ? '' : tz.offset})</option>
                         ))}
                       </select>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '160px', height: '38px', marginBottom: '4px' }}>
+                      <input type="checkbox" id="manage-hidden" checked={editHidden} onChange={e => setEditHidden(e.target.checked)} style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
+                      <label htmlFor="manage-hidden" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', cursor: 'pointer', userSelect: 'none' }}>
+                        👻 {lang === 'hr' ? 'Sakrij s ljestvice' : 'Hide from Leaderboard'}
+                      </label>
                     </div>
                     <button onClick={handleAdminSaveProfile} className="btn-primary" style={{ padding: '8px 14px', fontSize: '0.8rem', flexShrink: 0 }}>💾 {lang === 'hr' ? 'Spremi' : 'Save'}</button>
                   </div>

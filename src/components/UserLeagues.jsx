@@ -47,7 +47,7 @@ function CompBadge({ compId, style }) {
 }
 
 export default function UserLeagues() {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const { competition } = useCompetition();
   const [leagues, setLeagues] = useState({});
   const [users, setUsers] = useState({});
@@ -62,9 +62,9 @@ export default function UserLeagues() {
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [newFee, setNewFee] = useState('0');
+  const [newFee, setNewFee] = useState('20');
   const [newCurrency, setNewCurrency] = useState('EUR');
-  const [newPrizes, setNewPrizes] = useState('50,30,20');
+  const [newPrizes, setNewPrizes] = useState('100');
   const [createMsg, setCreateMsg] = useState('');
   // Manage
   const [managePassword, setManagePassword] = useState('');
@@ -131,10 +131,10 @@ export default function UserLeagues() {
       createdAt: Date.now(), members: { [uid]: true },
       password: newPassword.trim() || null,
       entryFee: fee, currency: newCurrency,
-      platformFeePercent: 10, prizeDistribution: dist, payments: {},
+      platformFeePercent: 0, prizeDistribution: dist, payments: {},
       joinRequests: {},
     });
-    setNewName(''); setNewDesc(''); setNewPassword(''); setNewFee('0'); setNewPrizes('50,30,20');
+    setNewName(''); setNewDesc(''); setNewPassword(''); setNewFee('20'); setNewPrizes('100');
     setShowCreate(false);
     setCreateMsg('✅ League created!');
     setTimeout(() => setCreateMsg(''), 3000);
@@ -564,8 +564,10 @@ export default function UserLeagues() {
                       flag: u.flag || '🌍',
                       points,
                       exact,
+                      hidden: u.hidden === true,
                     };
                   })
+                  .filter(p => !p.hidden || p.uid === currentUser?.uid || isAdmin)
                   .sort((a, b) => b.points - a.points || b.exact - a.exact);
                 
                 return board.length === 0 ? (
@@ -579,6 +581,7 @@ export default function UserLeagues() {
                             {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`}
                           </span>
                           {p.flag} {p.name}
+                          {p.hidden && isAdmin && <span style={{ marginLeft: '6px', fontSize: '0.78rem', color: '#ff5555' }} title="Hidden from other users">👻</span>}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <span style={{ color: 'var(--primary)', fontWeight: 'bold', fontSize: '0.85rem' }}>{p.points}</span>

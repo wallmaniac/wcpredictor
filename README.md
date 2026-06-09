@@ -39,6 +39,11 @@ Locked in before the first match kicks off:
 * **Total Points**: Sum of match predictions + global prediction bonus points.
 * **Primary Tiebreaker**: The total count of **Exact Scores** guessed correctly. Users with more exact scores rank higher in ties.
 
+### 4. Entry Fees & Payouts (Social Leagues)
+* **Entry Fee**: A fixed amount of €20 per participant for paid leagues.
+* **Winner-Takes-All**: 100% of the collected entry fees go directly to the league winner.
+* **No Platform Fees**: 0% administration or platform fees are deducted.
+
 ---
 
 ## 🛠️ How to Use the App
@@ -56,6 +61,7 @@ Locked in before the first match kicks off:
 
 ### 3. Social Leagues
 * **Private & Public Leagues**: Users can search for and join leagues, or create their own to compete within their circle of friends, families, or colleagues.
+* **Entry & Payment**: For paid leagues, the entry fee is €20. League creators can track and confirm payments from members in the management panel, and the winner takes the entire pool.
 * **Admin Approval**: League creators approve or deny join requests.
 
 ### 4. Tracking Standings

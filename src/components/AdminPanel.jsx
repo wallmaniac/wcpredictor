@@ -270,6 +270,24 @@ export default function AdminPanel() {
     setAssignUser('');
   };
 
+  const handleAssignAllUsersToLeague = async () => {
+    if (!assignLeague) return;
+    const league = leagues[assignLeague];
+    if (!league) return;
+    const confirmMsg = lang === 'hr'
+      ? `Jeste li sigurni da želite dodati SVE registrirane korisnike u ligu "${league.name}"?`
+      : `Are you sure you want to add ALL registered users to the league "${league.name}"?`;
+    if (!window.confirm(confirmMsg)) return;
+
+    const updates = {};
+    Object.keys(users).forEach(uid => {
+      updates[`wc2026/leagues/${assignLeague}/members/${uid}`] = true;
+    });
+
+    await update(ref(database), updates);
+    showMsg(lang === 'hr' ? '✅ Svi korisnici su dodani u ligu!' : '✅ All users added to the league!');
+  };
+
   const handleRemoveMember = async (lid, uid) => await remove(ref(database, `wc2026/leagues/${lid}/members/${uid}`));
   const handleDeleteLeague = async (lid) => {
     const confirmMsg = lang === 'hr' ? 'Obrisati ligu?' : 'Delete league?';
@@ -594,19 +612,22 @@ export default function AdminPanel() {
               </div>
             </div>
           )}
-          {isSuperAdmin && Object.keys(leagues).length > 0 && (
+          {Object.keys(leagues).length > 0 && (
             <div className="glass-card" style={cs}>
               <h3 style={{ color: 'var(--primary)', marginBottom: '12px', fontSize: '0.95rem' }}>🏟️ {t('assignUserToLeague') || 'Assign User to League'}</h3>
-              <div className="admin-form-row">
-                <select className="input-glass" value={assignUser} onChange={e => setAssignUser(e.target.value)}>
+              <div className="admin-form-row" style={{ flexWrap: 'wrap', gap: '8px' }}>
+                <select className="input-glass" value={assignUser} onChange={e => setAssignUser(e.target.value)} style={{ flex: 1, minWidth: '130px' }}>
                   <option value="">{t('selectUser') || '-- Select User --'}</option>
                   {Object.entries(users).map(([uid, u]) => <option key={uid} value={uid}>{u.displayName || u.email}</option>)}
                 </select>
-                <select className="input-glass" value={assignLeague} onChange={e => setAssignLeague(e.target.value)}>
+                <select className="input-glass" value={assignLeague} onChange={e => setAssignLeague(e.target.value)} style={{ flex: 1, minWidth: '130px' }}>
                   <option value="">{t('selectLeague') || '-- Select League --'}</option>
                   {Object.entries(leagues).map(([lid, l]) => <option key={lid} value={lid}>{l.name}</option>)}
                 </select>
-                <button onClick={handleAssignUserToLeague} className="btn-primary" style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>{t('assign') || 'Assign'}</button>
+                <div style={{ display: 'flex', gap: '8px', width: '100%', flexWrap: 'wrap' }}>
+                  <button onClick={handleAssignUserToLeague} className="btn-primary" style={{ flex: 1, padding: '10px', minWidth: '120px' }}>{t('assign') || 'Assign'}</button>
+                  <button onClick={handleAssignAllUsersToLeague} className="btn-outline" style={{ flex: 1, padding: '10px', minWidth: '120px' }}>👥 {lang === 'hr' ? 'Dodaj sve korisnike' : 'Add All Users'}</button>
+                </div>
               </div>
             </div>
           )}

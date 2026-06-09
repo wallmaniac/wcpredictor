@@ -115,7 +115,7 @@ export default function Leaderboard() {
     return () => { u1(); u1b(); u2(); u3(); u4(); u4b(); u5(); window.removeEventListener('select-league', h); };
   }, [fbPath, isWC, currentUser]);
 
-  const visibleUsers = users.filter(u => !u.hidden || u.uid === currentUser?.uid || isAdmin);
+  const visibleUsers = users.filter(u => !u.hidden || u.uid === currentUser?.uid);
   const sorted = [...visibleUsers].sort((a, b) => b.points !== a.points ? b.points - a.points : b.exact - a.exact);
   let filtered = sorted;
   if (selectedLeague !== 'all') {
@@ -123,7 +123,7 @@ export default function Leaderboard() {
     if (league?.members) filtered = sorted.filter(u => Object.keys(league.members).includes(u.uid));
   }
 
-  const myLeagues = Object.entries(leagues).filter(([, l]) => l.members?.[currentUser?.uid]).sort((a, b) => (a[1].name || '').localeCompare(b[1].name || ''));
+  const myLeagues = Object.entries(leagues).filter(([, l]) => l.members?.[currentUser?.uid] || isAdmin).sort((a, b) => (a[1].name || '').localeCompare(b[1].name || ''));
   const isInSameLeague = (uid) => Object.values(leagues).some(l => l.members?.[currentUser?.uid] && l.members?.[uid]);
   const hasAnyLock = isWC ? Object.keys(myLockedMatches).length > 0 : Object.keys(myLockedDays).length > 0;
   const canViewPredictions = (uid) => { if (isAdmin) return true; if (uid === currentUser?.uid) return true; if (!hasAnyLock) return false; return isInSameLeague(uid); };

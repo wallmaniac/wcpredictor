@@ -108,7 +108,7 @@ export default function UserLeagues() {
   };
 
   const myLeagueIds = Object.entries(leagues)
-    .filter(([, l]) => l.members?.[uid] && matchesFilter(l))
+    .filter(([, l]) => (l.members?.[uid] || isAdmin) && matchesFilter(l))
     .map(([id]) => id);
 
   const searchResults = searchTerm.trim().length >= 2
@@ -332,11 +332,12 @@ export default function UserLeagues() {
         const league = leagues[lid];
         if (!league) return null;
         const isCreator = league.createdBy === uid;
+        const canManage = isCreator || isAdmin;
         const memberCount = league.members ? Object.keys(league.members).length : 0;
         const pendingCount = league.joinRequests ? Object.keys(league.joinRequests).length : 0;
         const leagueComp = league.competitionId || 'wc2026';
         return (
-          <div key={lid} className="glass-card" style={{ ...cs, border: isCreator ? '1px solid rgba(0,255,136,0.15)' : undefined, cursor: 'pointer' }}
+          <div key={lid} className="glass-card" style={{ ...cs, border: canManage ? '1px solid rgba(0,255,136,0.15)' : undefined, cursor: 'pointer' }}
             onClick={() => {
               if (window.__setDashboardTab) window.__setDashboardTab('leaderboard');
               setTimeout(() => window.dispatchEvent(new CustomEvent('select-league', { detail: lid })), 100);
@@ -356,17 +357,17 @@ export default function UserLeagues() {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '4px' }}>
-                {isCreator && (
+                {canManage && (
                   <button onClick={(e) => { e.stopPropagation(); setShowManage(lid); setManagePassword(league.password || ''); setManageMsg(''); }} className="btn-outline" style={{ padding: '4px 10px', fontSize: '0.72rem' }}>⚙️ Manage</button>
                 )}
-                {!isCreator && (
+                {!canManage && (
                   <button onClick={(e) => { e.stopPropagation(); handleLeave(lid); }} className="btn-outline" style={{ padding: '4px 10px', fontSize: '0.72rem', borderColor: 'rgba(255,50,50,0.3)', color: '#ff5555' }}>🚪 Leave</button>
                 )}
               </div>
             </div>
 
             {/* Pending requests (visible to creator) */}
-            {isCreator && pendingCount > 0 && (
+            {canManage && pendingCount > 0 && (
               <div style={{ background: 'rgba(255,184,0,0.06)', border: '1px solid rgba(255,184,0,0.15)', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
                 <h5 style={{ fontSize: '0.8rem', color: '#FFB800', marginBottom: '6px' }}>📩 Join Requests ({pendingCount})</h5>
                 {Object.entries(league.joinRequests).map(([reqUid, req]) => (
@@ -390,7 +391,7 @@ export default function UserLeagues() {
                   <div key={mUid} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(255,255,255,0.03)', padding: '3px 8px', borderRadius: '14px', fontSize: '0.78rem' }}>
                     {u.flag || '🌍'} {u.displayName || u.email}
                     {isOwner && <span style={{ fontSize: '0.6rem', color: 'var(--primary)' }}>👑</span>}
-                    {isCreator && !isOwner && (
+                    {canManage && !isOwner && (
                       <button onClick={() => handleRemoveMember(lid, mUid)} style={{ background: 'none', border: 'none', color: '#ff5555', cursor: 'pointer', fontSize: '0.7rem', padding: '0 2px' }}>✕</button>
                     )}
                   </div>
@@ -567,7 +568,7 @@ export default function UserLeagues() {
                       hidden: u.hidden === true,
                     };
                   })
-                  .filter(p => !p.hidden || p.uid === currentUser?.uid || isAdmin)
+                  .filter(p => !p.hidden || p.uid === currentUser?.uid)
                   .sort((a, b) => b.points - a.points || b.exact - a.exact);
                 
                 return board.length === 0 ? (

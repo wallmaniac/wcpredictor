@@ -71,6 +71,9 @@ export default function UserLeagues() {
   const [manageMsg, setManageMsg] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
   const [compUsers, setCompUsers] = useState({});
+  const [manageFee, setManageFee] = useState('20');
+  const [manageCurrency, setManageCurrency] = useState('EUR');
+  const [managePrizes, setManagePrizes] = useState('100');
 
   useEffect(() => {
     const u1 = onValue(ref(database, 'wc2026/leagues'), s => setLeagues(s.exists() ? s.val() : {}));
@@ -199,6 +202,31 @@ export default function UserLeagues() {
     if (!window.confirm('Delete this league permanently?')) return;
     await remove(ref(database, `wc2026/leagues/${lid}`));
     setShowManage(null);
+  };
+
+  const handleConfirmPayment = async (lid, memberUid) => {
+    const entryFee = parseFloat(leagues[lid]?.entryFee) || 0;
+    await set(ref(database, `wc2026/leagues/${lid}/payments/${memberUid}`), {
+      amount: entryFee,
+      status: 'confirmed',
+      method: 'bank_transfer',
+      confirmedBy: currentUser?.uid || 'unknown',
+      confirmedAt: Date.now()
+    });
+  };
+
+  const handleUnconfirmPayment = async (lid, memberUid) => {
+    await remove(ref(database, `wc2026/leagues/${lid}/payments/${memberUid}`));
+  };
+
+  const calcPrizePool = (league) => {
+    if (!league) return null;
+    const fee = league.entryFee || 0;
+    if (fee === 0) return null;
+    const paidCount = league.payments ? Object.values(league.payments).filter(p => p.status === 'confirmed').length : 0;
+    const gross = fee * paidCount;
+    const net = gross;
+    return { gross, processorFee: 0, platformFee: 0, net, paidCount, currency: league.currency || 'EUR' };
   };
 
 
@@ -358,7 +386,15 @@ export default function UserLeagues() {
               </div>
               <div style={{ display: 'flex', gap: '4px' }}>
                 {canManage && (
-                  <button onClick={(e) => { e.stopPropagation(); setShowManage(lid); setManagePassword(league.password || ''); setManageMsg(''); }} className="btn-outline" style={{ padding: '4px 10px', fontSize: '0.72rem' }}>⚙️ Manage</button>
+                  <button onClick={(e) => {
+                    e.stopPropagation();
+                    setShowManage(lid);
+                    setManagePassword(league.password || '');
+                    setManageFee(league.entryFee !== undefined ? league.entryFee.toString() : '20');
+                    setManageCurrency(league.currency || 'EUR');
+                    setManagePrizes(Object.values(league.prizeDistribution || {}).join(',') || '100');
+                    setManageMsg('');
+                  }} className="btn-outline" style={{ padding: '4px 10px', fontSize: '0.72rem' }}>⚙️ Manage</button>
                 )}
                 {!canManage && (
                   <button onClick={(e) => { e.stopPropagation(); handleLeave(lid); }} className="btn-outline" style={{ padding: '4px 10px', fontSize: '0.72rem', borderColor: 'rgba(255,50,50,0.3)', color: '#ff5555' }}>🚪 Leave</button>
@@ -446,13 +482,37 @@ export default function UserLeagues() {
                   <label style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', marginBottom: '3px' }}>🔑 Password (empty = approval required)</label>
                   <input className="input-glass" type="text" placeholder="No password set" value={managePassword} onChange={e => setManagePassword(e.target.value)} style={{ fontSize: '0.85rem' }} />
                 </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: '80px' }}>
+                    <label style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', marginBottom: '3px' }}>💰 Entry Fee</label>
+                    <input className="input-glass" type="number" min="0" step="0.5" value={manageFee} onChange={e => setManageFee(e.target.value)} style={{ fontSize: '0.85rem' }} />
+                  </div>
+                  <div style={{ width: '80px' }}>
+                    <label style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', marginBottom: '3px' }}>Currency</label>
+                    <select className="input-glass" value={manageCurrency} onChange={e => setManageCurrency(e.target.value)} style={{ fontSize: '0.85rem' }}>
+                      <option value="EUR">EUR</option><option value="USD">USD</option><option value="GBP">GBP</option><option value="BAM">BAM</option><option value="HRK">HRK</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', marginBottom: '3px' }}>🏆 Prize Split % (comma separated)</label>
+                  <input className="input-glass" placeholder="100 or 50,30,20" value={managePrizes} onChange={e => setManagePrizes(e.target.value)} style={{ fontSize: '0.85rem' }} />
+                </div>
                 <button onClick={async () => {
                   const nameEl = document.getElementById('manage-name');
                   const descEl = document.getElementById('manage-desc');
+                  const fee = parseFloat(manageFee) || 0;
+                  const splits = managePrizes.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+                  const dist = {};
+                  splits.forEach((p, i) => { dist[i + 1] = p; });
+
                   await update(ref(database, `wc2026/leagues/${showManage}`), {
                     name: nameEl?.value?.trim() || leagues[showManage]?.name,
                     description: descEl?.value?.trim() || '',
                     password: managePassword.trim() || null,
+                    entryFee: fee,
+                    currency: manageCurrency,
+                    prizeDistribution: dist,
                   });
                   setManageMsg('✅ Settings saved!');
                   setTimeout(() => setManageMsg(''), 3000);
@@ -460,70 +520,134 @@ export default function UserLeagues() {
               </div>
             </div>
 
+            {/* Budget & Prize Pool Display */}
+            {leagues[showManage]?.entryFee > 0 && (() => {
+              const pp = calcPrizePool(leagues[showManage]);
+              if (!pp) return null;
+              const memberCount = leagues[showManage]?.members ? Object.keys(leagues[showManage].members).length : 0;
+              const dist = leagues[showManage]?.prizeDistribution || {};
+              return (
+                <div style={{ marginBottom: '16px', borderTop: '1px solid var(--glass-border)', paddingTop: '14px' }}>
+                  <h4 style={{ fontSize: '0.85rem', color: 'var(--primary)', marginBottom: '8px' }}>💰 Budget & Prize Pool</h4>
+                  <div className="glass-card" style={{ padding: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', textAlign: 'center', marginBottom: '10px' }}>
+                      <div style={{ padding: '6px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Entry Fee</div>
+                        <div style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{leagues[showManage].entryFee} {pp.currency}</div>
+                      </div>
+                      <div style={{ padding: '6px', background: 'rgba(0,255,136,0.05)', borderRadius: '6px' }}>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Net Prize Pool</div>
+                        <div style={{ fontWeight: 'bold', color: 'var(--primary)', fontSize: '0.85rem' }}>{pp.net.toFixed(2)} {pp.currency}</div>
+                      </div>
+                      <div style={{ padding: '6px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Paid Status</div>
+                        <div style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{pp.paidCount} / {memberCount}</div>
+                      </div>
+                    </div>
+                    {/* Prize Splits Distribution */}
+                    {Object.keys(dist).length > 0 && (
+                      <div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '6px', fontWeight: 600 }}>Prize Distribution:</div>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {Object.entries(dist).map(([pos, pct]) => {
+                            const amount = (pp.net * pct / 100).toFixed(2);
+                            return (
+                              <div key={pos} style={{ flex: '1', minWidth: '80px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--glass-border)', padding: '6px', borderRadius: '6px', fontSize: '0.75rem', textAlign: 'center' }}>
+                                <div style={{ fontWeight: 'bold', color: pos === '1' ? 'gold' : pos === '2' ? 'silver' : '#cd7f32' }}>
+                                  {pos === '1' ? '🥇 1st' : pos === '2' ? '🥈 2nd' : pos === '3' ? '🥉 3rd' : `${pos}th`} ({pct}%)
+                                </div>
+                                <div style={{ color: 'var(--primary)', fontWeight: 'bold', marginTop: '2px' }}>{amount} {pp.currency}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Members Management */}
             <div style={{ marginBottom: '16px', borderTop: '1px solid var(--glass-border)', paddingTop: '14px' }}>
               <h4 style={{ fontSize: '0.85rem', color: 'var(--primary)', marginBottom: '8px' }}>👥 Members ({leagues[showManage]?.members ? Object.keys(leagues[showManage].members).length : 0})</h4>
               
-              {/* Current members with remove */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '10px' }}>
+              {/* Current members with remove and payment toggles */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
                 {leagues[showManage]?.members && Object.keys(leagues[showManage].members).map(mUid => {
                   const u = users[mUid];
                   if (!u) return null;
                   const isOwner = mUid === leagues[showManage].createdBy;
+                  const isPaid = leagues[showManage]?.payments?.[mUid]?.status === 'confirmed';
+                  const entryFee = leagues[showManage]?.entryFee || 0;
+                  const hasFee = entryFee > 0;
+                  
                   return (
-                    <div key={mUid} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem' }}>
-                        {u.flag || '🌍'} {u.displayName || u.email}
-                        {isOwner && <span style={{ fontSize: '0.6rem', color: 'var(--primary)' }}>👑 Creator</span>}
+                    <div key={mUid} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid var(--glass-border)', gap: '8px', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', flex: 1, minWidth: '150px' }}>
+                        <span>{u.flag || '🌍'}</span>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontWeight: 600 }}>{u.displayName || u.email} {isOwner && <span style={{ fontSize: '0.65rem', color: 'var(--primary)' }}>👑 Creator</span>}</span>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{u.email}</span>
+                        </div>
                       </div>
-                      {!isOwner && (
-                        <button onClick={() => handleRemoveMember(showManage, mUid)} style={{ background: 'rgba(255,50,50,0.15)', color: '#ff5555', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.68rem', cursor: 'pointer' }}>✕ Remove</button>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {hasFee && (
+                          <button
+                            onClick={() => isPaid ? handleUnconfirmPayment(showManage, mUid) : handleConfirmPayment(showManage, mUid)}
+                            style={{
+                              background: isPaid ? 'rgba(0,255,136,0.15)' : 'rgba(255,184,0,0.15)',
+                              color: isPaid ? 'var(--primary)' : '#FFB800',
+                              border: isPaid ? '1px solid rgba(0,255,136,0.3)' : '1px solid rgba(255,184,0,0.3)',
+                              borderRadius: '6px',
+                              padding: '4px 10px',
+                              fontSize: '0.75rem',
+                              cursor: 'pointer',
+                              fontWeight: 600,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}
+                            title={isPaid ? "Click to set as unpaid" : "Click to set as paid"}
+                          >
+                            {isPaid ? '✅ Paid' : '💸 Unpaid'}
+                          </button>
+                        )}
+                        {!isOwner && (
+                          <button onClick={() => handleRemoveMember(showManage, mUid)} style={{ background: 'rgba(255,50,50,0.15)', color: '#ff5555', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '6px', padding: '4px 8px', fontSize: '0.75rem', cursor: 'pointer' }}>✕ Remove</button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
               </div>
 
-              {/* Add member — search-based */}
+              {/* Add member dropdown selection */}
               <div>
-                <label style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', marginBottom: '3px' }}>➕ Add a registered user</label>
-                <input
+                <label style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>➕ Add a registered user</label>
+                <select
                   className="input-glass"
-                  type="text"
-                  placeholder="Search by name or email..."
-                  autoComplete="off"
-                  value={memberSearch}
-                  onChange={(e) => setMemberSearch(e.target.value)}
-                  style={{ fontSize: '0.82rem', marginBottom: '4px' }}
-                />
-                <div style={{ maxHeight: '140px', overflowY: 'auto', background: 'rgba(0,0,0,0.15)', borderRadius: '6px' }}>
-                  {(() => {
-                    const q = removeDiacritics(memberSearch);
-                    const nonMembers = Object.entries(users)
-                      .filter(([uid2]) => !leagues[showManage]?.members?.[uid2]);
-                    const filtered = q.length > 0
-                      ? nonMembers.filter(([, u]) =>
-                          removeDiacritics(u.displayName || '').includes(q) ||
-                          removeDiacritics(u.email || '').includes(q)
-                        )
-                      : [];
-                    if (q.length === 0) return <p style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: '0.75rem', margin: 0 }}>Type to search users…</p>;
-                    if (filtered.length === 0) return <p style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: '0.75rem', margin: 0 }}>No users found matching "{memberSearch}"</p>;
-                    return filtered.slice(0, 20).map(([uid2, u]) => (
-                      <button key={uid2} onClick={async () => {
-                        await set(ref(database, `wc2026/leagues/${showManage}/members/${uid2}`), true);
-                        setManageMsg(`✅ Added ${u.displayName || u.email}`);
-                        setMemberSearch('');
-                        setTimeout(() => setManageMsg(''), 3000);
-                      }} style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%', background: 'transparent', border: 'none', borderBottom: '1px solid rgba(255,255,255,0.05)', padding: '7px 10px', cursor: 'pointer', color: 'var(--text-main)', fontSize: '0.8rem', textAlign: 'left' }}>
-                        <span>{u.flag || '🌍'}</span>
-                        <span style={{ flex: 1 }}>{u.displayName || u.email}</span>
-                        <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>{u.email}</span>
-                        <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>+</span>
-                      </button>
-                    ));
-                  })()}
-                </div>
+                  value=""
+                  onChange={async (e) => {
+                    const selectUid = e.target.value;
+                    if (!selectUid) return;
+                    const u = users[selectUid];
+                    await set(ref(database, `wc2026/leagues/${showManage}/members/${selectUid}`), true);
+                    setManageMsg(`✅ Added ${u.displayName || u.email}`);
+                    setTimeout(() => setManageMsg(''), 3000);
+                  }}
+                  style={{ fontSize: '0.85rem', width: '100%', padding: '10px', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--glass-border)', color: 'var(--text-main)', borderRadius: '8px' }}
+                >
+                  <option value="" style={{ background: '#111', color: '#888' }}>-- Select a user to add instantly --</option>
+                  {Object.entries(users)
+                    .filter(([uid2]) => !leagues[showManage]?.members?.[uid2])
+                    .sort((a, b) => (a[1].displayName || a[1].email || '').localeCompare(b[1].displayName || b[1].email || ''))
+                    .map(([uid2, u]) => (
+                      <option key={uid2} value={uid2} style={{ background: '#111', color: 'var(--text-main)' }}>
+                        {u.flag || '🌍'} {u.displayName || u.email} ({u.email})
+                      </option>
+                    ))}
+                </select>
               </div>
             </div>
 

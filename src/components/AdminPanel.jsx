@@ -5,7 +5,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { useCompetition } from '../context/CompetitionContext';
 import { database } from '../config/firebase';
 import { ref, get, set, update, remove, onValue, push } from 'firebase/database';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../config/firebase';
 import { ALL_MATCHES, calculatePoints, formatMatchTime } from '../utils/matchData';
 import { PL_2526_MATCHES, calculatePLPoints, formatPLMatchTime } from '../utils/plMatchData';
@@ -240,6 +240,19 @@ export default function AdminPanel() {
       showMsg(lang === 'hr' ? `✅ Korisnik ${newUserName} kreiran!` : `✅ User ${newUserName} created!`);
       setNewUserEmail(''); setNewUserPass(''); setNewUserName('');
     } catch (e) { showMsg(`❌ ${e.message}`); }
+  };
+
+  const handleTriggerPasswordReset = async (email, displayName) => {
+    const confirmMsg = lang === 'hr'
+      ? `⚠️ Jeste li sigurni da želite poslati email za ponovno postavljanje lozinke korisniku ${displayName || email}?`
+      : `⚠️ Are you sure you want to send a password reset email to ${displayName || email}?`;
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      await sendPasswordResetEmail(auth, email);
+      showMsg(lang === 'hr' ? `✅ Email za resetiranje lozinke poslan korisniku ${displayName || email}!` : `✅ Password reset email sent to ${displayName || email}!`);
+    } catch (e) {
+      showMsg(`❌ ${e.message}`);
+    }
   };
 
   // League management
@@ -706,6 +719,13 @@ export default function AdminPanel() {
                                       await remove(ref(database, `${fbPath}/users/${uid}/globalPicksLocked`));
                                       showMsg(lang === 'hr' ? `🔓 Otključana globalna predviđanja za ${users[uid]?.displayName || 'korisnika'}` : `🔓 Unlocked global picks for ${users[uid]?.displayName || 'user'}`);
                                     }} style={{ background: 'rgba(144,76,255,0.15)', color: 'var(--secondary)', border: '1px solid rgba(144,76,255,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.65rem', cursor: 'pointer' }} title={lang === 'hr' ? "Otključaj globalna predviđanja" : "Unlock Global Picks"}>🌍🔓</button>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); handleTriggerPasswordReset(user.email, user.displayName); }}
+                                      style={{ background: 'rgba(0,180,255,0.15)', color: '#00b4ff', border: '1px solid rgba(0,180,255,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.65rem', cursor: 'pointer' }}
+                                      title={lang === 'hr' ? "Pošalji email za resetiranje lozinke" : "Send Password Reset Email"}
+                                    >
+                                      🔑
+                                    </button>
                                     <button onClick={() => handleToggleAdmin(uid)} className="btn-outline" style={{ padding: '3px 8px', fontSize: '0.7rem' }}>{isSuper ? '→User' : isAdm ? (isSuperAdmin ? '→Super' : '→User') : '+Admin'}</button>
                                     <button onClick={() => handleDeleteUser(uid)} style={{ background: 'rgba(255,50,50,0.15)', color: '#FF5555', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.7rem', cursor: 'pointer' }}>🗑️</button>
                                   </>
@@ -744,6 +764,13 @@ export default function AdminPanel() {
                         )}
                         {isSuperAdmin && uid !== currentUser.uid && (!isSuper || isSuperAdmin) && (
                           <>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleTriggerPasswordReset(user.email, user.displayName); }}
+                              style={{ background: 'rgba(0,180,255,0.15)', color: '#00b4ff', border: '1px solid rgba(0,180,255,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.68rem', cursor: 'pointer' }}
+                              title={lang === 'hr' ? "Pošalji email za resetiranje lozinke" : "Send Password Reset Email"}
+                            >
+                              🔑
+                            </button>
                             <button onClick={() => handleToggleAdmin(uid)} className="btn-outline" style={{ padding: '3px 8px', fontSize: '0.68rem' }}>{isSuper ? '→User' : isAdm ? (isSuperAdmin ? '→Super' : '→User') : '+Admin'}</button>
                             <button onClick={() => handleDeleteUser(uid)} style={{ background: 'rgba(255,50,50,0.15)', color: '#FF5555', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.68rem', cursor: 'pointer' }}>🗑️</button>
                           </>

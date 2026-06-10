@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { auth, database } from '../config/firebase';
 import { ref, set } from 'firebase/database';
 import { useLanguage } from '../context/LanguageContext';
@@ -80,6 +80,16 @@ export default function Login() {
         let loginEmail = email;
         if (email === 'admin' && password === 'admin1') loginEmail = 'admin@wc2026.com';
         await signInWithEmailAndPassword(auth, loginEmail, password);
+        navigate('/dashboard');
+      } else if (mode === 'reset') {
+        if (!email.trim()) {
+          setError(t('invalidEmail') || 'Please enter a valid email.');
+          setLoading(false);
+          return;
+        }
+        await sendPasswordResetEmail(auth, email.trim());
+        setMode('login');
+        setError('✅ ' + (t('resetEmailSent') || 'Password reset email sent! Check your inbox.'));
       } else {
         if (!displayName.trim()) { setError(t('enterName')); setLoading(false); return; }
         if (!country) { setError(t('selectCountryErr')); setLoading(false); return; }
@@ -95,12 +105,13 @@ export default function Login() {
           exactScores: 0,
           createdAt: Date.now()
         });
+        navigate('/dashboard');
       }
-      navigate('/dashboard');
     } catch (err) {
       if (err.code === 'auth/email-already-in-use') setError(t('alreadyRegistered'));
       else if (err.code === 'auth/weak-password') setError(t('weakPassword'));
       else if (err.code === 'auth/invalid-email') setError(t('invalidEmail'));
+      else if (err.code === 'auth/user-not-found') setError(t('userNotFound') || 'User not found.');
       else setError(err.message);
     } finally { setLoading(false); }
   };
@@ -124,14 +135,24 @@ export default function Login() {
 
         <div className="glass-panel login-card">
           {/* Tab switcher */}
-          <div className="login-tabs">
-            <button onClick={() => setMode('login')}
-              className={`login-tab ${mode === 'login' ? 'active' : ''}`}>{t('signIn')}</button>
-            <button onClick={() => setMode('register')}
-              className={`login-tab ${mode === 'register' ? 'active' : ''}`}>{t('register')}</button>
-          </div>
+          {mode !== 'reset' ? (
+            <div className="login-tabs">
+              <button onClick={() => setMode('login')}
+                className={`login-tab ${mode === 'login' ? 'active' : ''}`}>{t('signIn')}</button>
+              <button onClick={() => setMode('register')}
+                className={`login-tab ${mode === 'register' ? 'active' : ''}`}>{t('register')}</button>
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '10px 0', borderBottom: '1px solid var(--glass-border)', color: 'var(--primary)', fontWeight: 'bold' }}>
+              🔑 {t('resetPassword') || 'Reset Password'}
+            </div>
+          )}
 
-          {error && <div className="login-error">{error}</div>}
+          {error && (
+            <div className={error.startsWith('✅') ? "login-success" : "login-error"} style={error.startsWith('✅') ? { background: 'rgba(0,255,136,0.1)', color: 'var(--primary)', padding: '10px', borderRadius: '8px', marginBottom: '16px', fontSize: '0.85rem', textAlign: 'center' } : undefined}>
+              {error}
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="login-form">
             {mode === 'register' && (
@@ -144,16 +165,25 @@ export default function Login() {
 
             <div className="login-field">
               <label>{mode === 'login' ? t('emailOrUsername') : t('email')}</label>
-              <input type={mode === 'register' ? 'email' : 'text'} className="input-glass"
+              <input type={mode === 'login' ? 'text' : 'email'} className="input-glass"
                 value={email} onChange={e => setEmail(e.target.value)}
                 placeholder={mode === 'login' ? 'admin' : 'your@email.com'} required />
             </div>
 
-            <div className="login-field">
-              <label>{t('password')}</label>
-              <input type="password" className="input-glass" value={password}
-                onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
-            </div>
+            {mode !== 'reset' && (
+              <div className="login-field">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <label>{t('password')}</label>
+                  {mode === 'login' && (
+                    <button type="button" onClick={() => { setMode('reset'); setError(''); }} style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '0.78rem', cursor: 'pointer', padding: 0 }}>
+                      {t('forgotPassword') || 'Forgot password?'}
+                    </button>
+                  )}
+                </div>
+                <input type="password" className="input-glass" value={password}
+                  onChange={e => setPassword(e.target.value)} placeholder="••••••••" required={mode !== 'reset'} />
+              </div>
+            )}
 
             {mode === 'register' && (
               <div className="login-field">
@@ -168,9 +198,15 @@ export default function Login() {
               </div>
             )}
 
-            <button type="submit" className="btn-primary login-submit" disabled={loading}>
-              {loading ? `⏳ ${t('pleaseWait')}` : mode === 'login' ? `🔑 ${t('signIn')}` : `🎮 ${t('createAccount')}`}
+            <button type="submit" className="btn-primary login-submit" disabled={loading} style={{ marginTop: '10px' }}>
+              {loading ? `⏳ ${t('pleaseWait')}` : mode === 'login' ? `🔑 ${t('signIn')}` : mode === 'reset' ? `✉️ ${t('sendResetEmail') || 'Send Reset Email'}` : `🎮 ${t('createAccount')}`}
             </button>
+
+            {mode === 'reset' && (
+              <button type="button" onClick={() => { setMode('login'); setError(''); }} className="btn-outline" style={{ width: '100%', padding: '10px', fontSize: '0.85rem' }}>
+                ⬅️ {t('backToSignIn') || 'Back to Sign In'}
+              </button>
+            )}
           </form>
         </div>
 

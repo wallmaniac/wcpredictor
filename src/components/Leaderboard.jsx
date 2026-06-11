@@ -20,7 +20,7 @@ async function saveAdminPredictionLeaderboardExternal(database, fbPath, uid, mn,
 }
 
 // Static start dates to prevent recreating Date objects on every render pass
-const WC_START_DATE = new Date('2026-06-11T00:00:00Z');
+const WC_START_DATE = new Date('2026-06-11T19:00:00Z');
 const PL_START_DATE = new Date('2025-08-16T00:00:00Z');
 
 export default function Leaderboard() {

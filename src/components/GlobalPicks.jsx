@@ -30,7 +30,7 @@ export default function GlobalPicks() {
 
   // Competition start dates for auto-lock
   const competitionStartDates = {
-    wc2026: new Date('2026-06-11T00:00:00Z'),
+    wc2026: new Date('2026-06-11T19:00:00Z'),
     pl2526: new Date('2025-08-16T00:00:00Z'), // PL already started
   };
 

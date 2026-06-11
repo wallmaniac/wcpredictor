@@ -157,7 +157,7 @@ export const GROUP_TEAMS = {
 };
 export const TEAMS = Object.values(GROUP_TEAMS).flat().sort();
 export const ALL_MATCHES = [...WC_2026_MATCHES,...WC_2026_KNOCKOUT_MATCHES];
-export const GLOBAL_PREDICTIONS_DEADLINE = "2026-06-11T18:00:00Z";
+export const GLOBAL_PREDICTIONS_DEADLINE = "2026-06-11T19:00:00Z";
 export const FIXTURES_VERSION = "2026-05-15-wiki-utc";
 
 export const calculatePoints = (prediction, actual) => {

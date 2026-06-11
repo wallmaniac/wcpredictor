@@ -548,7 +548,7 @@ function findMatchNumber(apiEvent, matchList) {
  */
 export async function syncLiveScores(competitionId = 'wc2026', options = {}) {
   // WC hasn't started yet — don't hit the API
-  if (competitionId === 'wc2026' && Date.now() < new Date('2026-06-11T00:00:00Z').getTime()) {
+  if (competitionId === 'wc2026' && Date.now() < new Date('2026-06-11T19:00:00Z').getTime()) {
     return { success: false, error: '⏳ World Cup 2026 starts June 11, 2026. No matches to sync yet.' };
   }
 
@@ -733,7 +733,7 @@ async function calculatePLCleanSheets() {
  */
 export async function syncPlayerStats(competitionId = 'pl2526') {
   // WC hasn't started yet — API returns old 2022 data, don't save it
-  if (competitionId === 'wc2026' && Date.now() < new Date('2026-06-11T00:00:00Z').getTime()) {
+  if (competitionId === 'wc2026' && Date.now() < new Date('2026-06-11T19:00:00Z').getTime()) {
     return { success: false, error: '⏳ World Cup 2026 starts June 11, 2026. Stats will be available once the tournament begins.' };
   }
 
@@ -854,7 +854,7 @@ export async function syncPlayerStats(competitionId = 'pl2526') {
  */
 export async function syncStandings(competitionId = 'pl2526') {
   // WC hasn't started yet — don't fetch stale data
-  if (competitionId === 'wc2026' && Date.now() < new Date('2026-06-11T00:00:00Z').getTime()) {
+  if (competitionId === 'wc2026' && Date.now() < new Date('2026-06-11T19:00:00Z').getTime()) {
     return { success: false, error: '⏳ World Cup 2026 starts June 11, 2026. Standings will be available once the tournament begins.' };
   }
 

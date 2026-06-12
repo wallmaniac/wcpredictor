@@ -125,6 +125,51 @@ function isSamePlayer(p1, p2) {
   return false;
 }
 
+function levenshteinDistance(a, b) {
+  const tmp = [];
+  let i, j;
+  for (i = 0; i <= a.length; i++) {
+    tmp.push([i]);
+  }
+  for (j = 0; j <= b.length; j++) {
+    tmp[0][j] = j;
+  }
+  for (i = 1; i <= a.length; i++) {
+    for (j = 1; j <= b.length; j++) {
+      tmp[i][j] = Math.min(
+        tmp[i - 1][j] + 1,
+        tmp[i][j - 1] + 1,
+        tmp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+  }
+  return tmp[a.length][b.length];
+}
+
+function areNamesSimilar(pick, act) {
+  const p = removeDiacritics(pick).replace(/[^a-z0-9]/g, '');
+  const a = removeDiacritics(act).replace(/[^a-z0-9]/g, '');
+  if (p === a) return true;
+  if (p.length < 3 || a.length < 3) return false;
+  
+  const dist = levenshteinDistance(p, a);
+  const allowedError = a.length >= 6 ? 2 : 1;
+  if (dist <= allowedError) return true;
+
+  const pWords = removeDiacritics(pick).split(/\s+/).filter(w => w.length >= 3);
+  const aWords = removeDiacritics(act).split(/\s+/).filter(w => w.length >= 3);
+  for (const pw of pWords) {
+    for (const aw of aWords) {
+      if (pw === aw) return true;
+      const wDist = levenshteinDistance(pw, aw);
+      const wAllowed = aw.length >= 6 ? 2 : 1;
+      if (wDist <= wAllowed) return true;
+    }
+  }
+  
+  return false;
+}
+
 function isGlobalPickMatch(userPick, actualResult) {
   if (!userPick || !actualResult) return false;
   
@@ -136,6 +181,7 @@ function isGlobalPickMatch(userPick, actualResult) {
   const actuals = actualNorm.split(',').map(s => s.trim()).filter(Boolean);
   for (const act of actuals) {
     if (pickNorm === act) return true;
+    if (areNamesSimilar(userPick.toString(), act)) return true;
     
     const pickWords = pickNorm.split(/\s+/).filter(Boolean);
     const actWords = act.split(/\s+/).filter(Boolean);
@@ -805,47 +851,13 @@ export async function syncPlayerStats(competitionId = 'pl2526') {
 
   await set(ref(database, `${fbPath}/statistics`), statsToSave);
 
-  // Auto-update global results with leaders (top scorer, assist, goalkeeper)
-  const globalResultsUpdates = {};
-  
-  if (scorers.length > 0) {
-    const maxGoals = scorers[0].count;
-    const topScorers = scorers.filter(s => s.count === maxGoals).map(s => s.name).join(', ');
-    globalResultsUpdates.topScorer = topScorers;
-  }
-
-  if (assists.length > 0) {
-    const maxAssists = assists[0].count;
-    const topAssists = assists.filter(a => a.count === maxAssists).map(a => a.name).join(', ');
-    globalResultsUpdates.topAssist = topAssists;
-  }
-
-  if (cleanSheets.length > 0) {
-    const maxCleanSheets = cleanSheets[0].count;
-    const topGoalkeepers = cleanSheets.filter(c => c.count === maxCleanSheets).map(c => c.name).join(', ');
-    globalResultsUpdates.topGoalkeeper = topGoalkeepers;
-  }
-
-  if (Object.keys(globalResultsUpdates).length > 0) {
-    const globalResultsRef = ref(database, `${fbPath}/metadata/globalResults`);
-    const globalResultsSnap = await get(globalResultsRef);
-    const existingGlobalResults = globalResultsSnap.exists() ? globalResultsSnap.val() : {};
-    
-    await set(globalResultsRef, {
-      ...existingGlobalResults,
-      ...globalResultsUpdates,
-    });
-  }
-
-  await recalculateAllPoints(competitionId);
-
   const topScorerName = scorers.length > 0 ? `${scorers[0].name} (${scorers[0].count}g)` : 'none';
   const topAssistName = assists.length > 0 ? `${assists[0].name} (${assists[0].count}a)` : 'none';
   const topGKName = cleanSheets.length > 0 ? `${cleanSheets[0].name} (${cleanSheets[0].count}cs)` : 'none';
 
   return { 
     success: true, 
-    message: `✅ Stats synced! Scorers: ${scorers.length} (top: ${topScorerName}), Assists: ${assists.length} (top: ${topAssistName}), GK: ${cleanSheets.length} (top: ${topGKName}). Global results auto-updated.`
+    message: `✅ Stats synced! Scorers: ${scorers.length} (top: ${topScorerName}), Assists: ${assists.length} (top: ${topAssistName}), GK: ${cleanSheets.length} (top: ${topGKName}).`
   };
 }
 
@@ -868,26 +880,6 @@ export async function syncStandings(competitionId = 'pl2526') {
     table: result.standings,
     lastSynced: Date.now(),
   });
-
-  // Auto-update global results with the top 3 teams
-  if (result.standings && result.standings.length >= 3) {
-    const champion = result.standings[0].team;
-    const secondPlace = result.standings[1].team;
-    const thirdPlace = result.standings[2].team;
-
-    const globalResultsRef = ref(database, `${fbPath}/metadata/globalResults`);
-    const globalResultsSnap = await get(globalResultsRef);
-    const existingGlobalResults = globalResultsSnap.exists() ? globalResultsSnap.val() : {};
-
-    await set(globalResultsRef, {
-      ...existingGlobalResults,
-      champion,
-      secondPlace,
-      thirdPlace,
-    });
-  }
-
-  await recalculateAllPoints(competitionId);
 
   return { success: true, message: `✅ Synced standings for ${result.standings.length} teams.` };
 }

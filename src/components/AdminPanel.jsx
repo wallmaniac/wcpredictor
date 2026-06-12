@@ -56,6 +56,12 @@ export default function AdminPanel() {
   const [selectedMatch, setSelectedMatch] = useState('');
   const [score1, setScore1] = useState('');
   const [score2, setScore2] = useState('');
+  const [matchResults, setMatchResults] = useState({});
+  const [updateLeaderboardOnStatsSave, setUpdateLeaderboardOnStatsSave] = useState(false);
+  const [matchSearchQuery, setMatchSearchQuery] = useState('');
+  const [importingCat, setImportingCat] = useState(null);
+  const [importText, setImportText] = useState('');
+  const autoSelectInitialized = useRef(false);
   const [msg, setMsg] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [syncRound, setSyncRound] = useState('');
@@ -119,6 +125,11 @@ export default function AdminPanel() {
   const matchList = isWC ? ALL_MATCHES : PL_2526_MATCHES;
 
   useEffect(() => {
+    autoSelectInitialized.current = false;
+    setSelectedMatch('');
+  }, [competition.id]);
+
+  useEffect(() => {
     const unsub1 = onValue(ref(database, 'wc2026/users'), s => setUsers(s.exists() ? s.val() : {}));
     const unsub2 = onValue(ref(database, 'wc2026/leagues'), s => setLeagues(s.exists() ? s.val() : {}));
     // Load global results from competition-specific path
@@ -148,8 +159,50 @@ export default function AdminPanel() {
         });
       }
     });
-    return () => { unsub1(); unsub2(); unsub3(); };
+    const unsub4 = onValue(ref(database, `${fbPath}/match_results`), s => {
+      setMatchResults(s.exists() ? s.val() : {});
+    });
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
   }, [fbPath, isWC]);
+
+  useEffect(() => {
+    if (selectedMatch) {
+      const res = matchResults[`match_${selectedMatch}`];
+      if (res) {
+        setScore1(res.score1 !== null && res.score1 !== undefined ? String(res.score1) : '');
+        setScore2(res.score2 !== null && res.score2 !== undefined ? String(res.score2) : '');
+      } else {
+        setScore1('');
+        setScore2('');
+      }
+    } else {
+      setScore1('');
+      setScore2('');
+    }
+  }, [selectedMatch, matchResults]);
+
+  useEffect(() => {
+    if (selectedMatch && adminTab === 'scores') {
+      setTimeout(() => {
+        const element = document.getElementById(`admin-match-${selectedMatch}`);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 50);
+    }
+  }, [selectedMatch, adminTab]);
+
+  useEffect(() => {
+    if (adminTab === 'scores' && Object.keys(matchResults).length > 0 && !selectedMatch && !autoSelectInitialized.current) {
+      const firstUnplayed = matchList.find(m => !matchResults[`match_${m.matchNumber}`]?.isPlayed);
+      if (firstUnplayed) {
+        setSelectedMatch(String(firstUnplayed.matchNumber));
+      } else if (matchList.length > 0) {
+        setSelectedMatch(String(matchList[0].matchNumber));
+      }
+      autoSelectInitialized.current = true;
+    }
+  }, [adminTab, matchResults, matchList, selectedMatch]);
 
   const showMsg = (m) => { setMsg(m); setTimeout(() => setMsg(''), 4000); };
 
@@ -170,6 +223,24 @@ export default function AdminPanel() {
     });
     await recalculateAllPoints(competition.id);
     showMsg(lang === 'hr' ? `✅ Utakmica ${selectedMatch} spremljena!` : `✅ Match ${selectedMatch} saved!`);
+
+    // Automatically select the next unplayed match
+    const currentIdx = matchList.findIndex(m => String(m.matchNumber) === String(selectedMatch));
+    if (currentIdx !== -1) {
+      let nextUnplayed = matchList.slice(currentIdx + 1).find(m => {
+        const res = matchResults[`match_${m.matchNumber}`];
+        return !res?.isPlayed && String(m.matchNumber) !== String(selectedMatch);
+      });
+      if (!nextUnplayed) {
+        nextUnplayed = matchList.slice(0, currentIdx).find(m => {
+          const res = matchResults[`match_${m.matchNumber}`];
+          return !res?.isPlayed && String(m.matchNumber) !== String(selectedMatch);
+        });
+      }
+      if (nextUnplayed) {
+        setSelectedMatch(String(nextUnplayed.matchNumber));
+      }
+    }
   };
 
   // Clear a single match result
@@ -354,28 +425,105 @@ export default function AdminPanel() {
     };
     await set(ref(database, `${fbPath}/statistics`), sorted);
 
-    // Auto-update global results with leaders
-    const globalResultsUpdates = {};
-    if (sorted.scorers.length > 0) {
-      const maxG = sorted.scorers[0].count;
-      globalResultsUpdates.topScorer = sorted.scorers.filter(s => s.count === maxG).map(s => s.name).join(', ');
-    }
-    if (sorted.assists.length > 0) {
-      const maxA = sorted.assists[0].count;
-      globalResultsUpdates.topAssist = sorted.assists.filter(a => a.count === maxA).map(a => a.name).join(', ');
-    }
-    if (sorted.cleanSheets.length > 0) {
-      const maxCS = sorted.cleanSheets[0].count;
-      globalResultsUpdates.topGoalkeeper = sorted.cleanSheets.filter(c => c.count === maxCS).map(c => c.name).join(', ');
-    }
-    if (Object.keys(globalResultsUpdates).length > 0) {
+    if (updateLeaderboardOnStatsSave) {
+      // Auto-update global results with leaders (clearing them if lists are empty)
+      const globalResultsUpdates = {
+        topScorer: "",
+        topAssist: "",
+        topGoalkeeper: ""
+      };
+      if (sorted.scorers.length > 0) {
+        const maxG = sorted.scorers[0].count;
+        globalResultsUpdates.topScorer = sorted.scorers.filter(s => s.count === maxG).map(s => s.name).join(', ');
+      }
+      if (sorted.assists.length > 0) {
+        const maxA = sorted.assists[0].count;
+        globalResultsUpdates.topAssist = sorted.assists.filter(a => a.count === maxA).map(a => a.name).join(', ');
+      }
+      if (sorted.cleanSheets.length > 0) {
+        const maxCS = sorted.cleanSheets[0].count;
+        globalResultsUpdates.topGoalkeeper = sorted.cleanSheets.filter(c => c.count === maxCS).map(c => c.name).join(', ');
+      }
+
       const grRef = ref(database, `${fbPath}/metadata/globalResults`);
       const grSnap = await get(grRef);
       const existing = grSnap.exists() ? grSnap.val() : {};
+      
+      // Update global results with new values (empty strings will clear deleted categories)
       await set(grRef, { ...existing, ...globalResultsUpdates });
+      await recalculateAllPoints(competition.id);
+      
+      showMsg(lang === 'hr' ? '✅ Statistika spremljena i poredak preračunat!' : '✅ Player stats saved & leaderboard updated!');
+    } else {
+      showMsg(lang === 'hr' ? '✅ Statistika spremljena (poredak nije preračunat)!' : '✅ Player stats saved (leaderboard not updated)!');
     }
+  };
 
-    showMsg(lang === 'hr' ? '✅ Statistika igrača spremljena!' : '✅ Player stats saved!');
+  const parsePastedStats = (text) => {
+    if (!text) return [];
+    const lines = text.split('\n');
+    const results = [];
+    for (let line of lines) {
+      line = line.trim();
+      if (!line) continue;
+      
+      // Remove leading numbering like "1. ", "1) ", "[1] "
+      line = line.replace(/^\d+[\.\)\s\]\-]+/g, '').trim();
+      
+      let name = '';
+      let team = '';
+      let count = 0;
+      
+      // Try format: Name (Team) - Count or Name (Team) Count
+      const parenMatch = line.match(/^([^\(]+)\(([^\)]+)\)[\s\-]*(\d+)/);
+      if (parenMatch) {
+        name = parenMatch[1].trim();
+        team = parenMatch[2].trim();
+        count = parseInt(parenMatch[3], 10) || 0;
+      } else {
+        // Try CSV/TSV/comma separated or dash separated: "Name, Team, Count"
+        const parts = line.split(/[,;\t]|\s-\s/).map(s => s.trim());
+        if (parts.length >= 3) {
+          name = parts[0];
+          team = parts[1];
+          count = parseInt(parts[2], 10) || 0;
+        } else if (parts.length === 2) {
+          const maybeCount = parseInt(parts[1], 10);
+          if (!isNaN(maybeCount)) {
+            name = parts[0];
+            count = maybeCount;
+          } else {
+            name = parts[0];
+            team = parts[1];
+          }
+        } else {
+          // Fallback: try last word as number
+          const tokens = line.split(/\s+/);
+          if (tokens.length >= 2) {
+            const lastToken = tokens[tokens.length - 1];
+            const maybeCount = parseInt(lastToken, 10);
+            if (!isNaN(maybeCount)) {
+              count = maybeCount;
+              if (tokens.length >= 3) {
+                team = tokens[tokens.length - 2];
+                name = tokens.slice(0, tokens.length - 2).join(' ');
+              } else {
+                name = tokens[0];
+              }
+            } else {
+              name = line;
+            }
+          } else {
+            name = line;
+          }
+        }
+      }
+      
+      if (name) {
+        results.push({ name, team, count });
+      }
+    }
+    return results;
   };
 
   const addStatRow = (category) => {
@@ -573,26 +721,151 @@ export default function AdminPanel() {
           </div>
           <div className="glass-card" style={cs}>
             <h3 style={{ color: 'var(--primary)', marginBottom: '12px', fontSize: '0.95rem' }}>📝 {t('manualScore')} — {competition.shortName}</h3>
-            <select className="input-glass" value={selectedMatch} onChange={e => setSelectedMatch(e.target.value)} style={{ marginBottom: '10px', width: '100%' }}>
-              <option value="">{t('chooseMatch')}</option>
-              {Object.entries(groupMatchesByStage()).map(([stage, matches]) => (
-                <optgroup key={stage} label={ts(stage)}>
-                  {matches.map(m => (
-                    <option key={m.matchNumber} value={m.matchNumber}>
-                      #{m.matchNumber} {tt(m.team1)} {t('vs')} {tt(m.team2)}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-            <div className="admin-score-row">
-              <input type="number" className="input-glass" placeholder={t('homeScore')} value={score1} onChange={e => setScore1(e.target.value)} min="0" />
-              <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>-</span>
-              <input type="number" className="input-glass" placeholder={t('awayScore')} value={score2} onChange={e => setScore2(e.target.value)} min="0" />
-              <button onClick={handleSaveScore} className="btn-primary" style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>{t('saveScore')}</button>
-              <button onClick={handleClearResult} style={{ padding: '8px 12px', whiteSpace: 'nowrap', background: 'rgba(255,50,50,0.12)', color: '#ff5555', border: '1px solid rgba(255,50,50,0.25)', borderRadius: '8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.82rem' }}>
-                🗑️ {t('clear') || 'Clear'}
-              </button>
+            
+            {/* Search Input for Matches */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              <input
+                type="text"
+                className="input-glass"
+                placeholder={lang === 'hr' ? 'Traži utakmicu (npr. Brazil, 1, Group Stage)...' : 'Search match (e.g. Brazil, 1, Group Stage)...'}
+                value={matchSearchQuery}
+                onChange={e => setMatchSearchQuery(e.target.value)}
+                style={{ fontSize: '0.82rem', padding: '8px 12px', flex: 1 }}
+              />
+              {matchSearchQuery && (
+                <button 
+                  onClick={() => setMatchSearchQuery('')} 
+                  className="btn-outline" 
+                  style={{ padding: '0 12px', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+              {/* Match List column */}
+              <div style={{ flex: '1 1 300px', display: 'flex', flexDirection: 'column' }}>
+                <div 
+                  style={{ 
+                    maxHeight: '320px', 
+                    overflowY: 'auto', 
+                    background: 'rgba(0,0,0,0.25)', 
+                    borderRadius: '8px', 
+                    border: '1px solid var(--glass-border)',
+                    padding: '6px'
+                  }}
+                  className="custom-scrollbar"
+                >
+                  {(() => {
+                    const filteredMatches = matchList.filter(m => {
+                      const q = removeDiacritics(matchSearchQuery);
+                      if (!q) return true;
+                      return removeDiacritics(m.team1 || '').includes(q) || 
+                             removeDiacritics(m.team2 || '').includes(q) || 
+                             removeDiacritics(m.stage || '').includes(q) ||
+                             String(m.matchNumber).includes(q);
+                    });
+
+                    return (
+                      <>
+                        {filteredMatches.map(m => {
+                          const isSelected = String(m.matchNumber) === String(selectedMatch);
+                          const res = matchResults[`match_${m.matchNumber}`];
+                          const isPlayed = res?.isPlayed;
+                          return (
+                            <div 
+                              key={m.matchNumber} 
+                              id={`admin-match-${m.matchNumber}`}
+                              onClick={() => setSelectedMatch(String(m.matchNumber))}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '8px 12px',
+                                borderRadius: '6px',
+                                background: isSelected 
+                                  ? 'rgba(0, 255, 136, 0.15)' 
+                                  : isPlayed 
+                                    ? 'rgba(255, 255, 255, 0.02)' 
+                                    : 'rgba(255, 255, 255, 0.05)',
+                                border: isSelected 
+                                  ? '1px solid var(--primary)' 
+                                  : '1px solid rgba(255, 255, 255, 0.05)',
+                                cursor: 'pointer',
+                                marginBottom: '5px',
+                                transition: 'all 0.15s ease',
+                                fontSize: '0.82rem'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ 
+                                  background: isPlayed ? 'rgba(0, 255, 136, 0.18)' : 'rgba(255, 255, 255, 0.08)',
+                                  color: isPlayed ? 'var(--primary)' : 'var(--text-muted)',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 'bold'
+                                }}>
+                                  #{m.matchNumber}
+                                </span>
+                                <span style={{ color: isSelected ? '#fff' : 'var(--text-main)', fontWeight: isSelected ? 'bold' : 'normal' }}>
+                                  {tt(m.team1)} vs {tt(m.team2)}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                {isPlayed ? (
+                                  <span style={{ fontWeight: 'bold', color: 'var(--primary)' }}>
+                                    {res.score1} - {res.score2}
+                                  </span>
+                                ) : (
+                                  <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>
+                                    {lang === 'hr' ? 'neodigrano' : 'unplayed'}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {filteredMatches.length === 0 && (
+                          <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', padding: '15px', textAlign: 'center', margin: 0 }}>
+                            {lang === 'hr' ? 'Nema pronađenih utakmica.' : 'No matches found.'}
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Score Input form column */}
+              <div style={{ flex: '1 1 240px', display: 'flex', flexDirection: 'column', justifyContent: 'center', background: 'rgba(255, 255, 255, 0.01)', padding: '14px', borderRadius: '8px', border: '1px solid var(--glass-border)' }}>
+                {selectedMatch ? (
+                  <>
+                    <div style={{ marginBottom: '12px', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--primary)', textAlign: 'center' }}>
+                      {(() => {
+                        const m = matchList.find(x => String(x.matchNumber) === String(selectedMatch));
+                        return m ? `#${m.matchNumber} : ${tt(m.team1)} - ${tt(m.team2)}` : `#${selectedMatch}`;
+                      })()}
+                    </div>
+                    <div className="admin-score-row" style={{ justifyContent: 'center', marginBottom: '12px' }}>
+                      <input type="number" className="input-glass" placeholder={t('homeScore')} value={score1} onChange={e => setScore1(e.target.value)} min="0" style={{ width: '65px', padding: '8px', textAlign: 'center', fontSize: '0.95rem' }} />
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 'bold', fontSize: '1.2rem' }}>-</span>
+                      <input type="number" className="input-glass" placeholder={t('awayScore')} value={score2} onChange={e => setScore2(e.target.value)} min="0" style={{ width: '65px', padding: '8px', textAlign: 'center', fontSize: '0.95rem' }} />
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button onClick={handleSaveScore} className="btn-primary" style={{ flex: 2, padding: '10px 14px', fontSize: '0.82rem', whiteSpace: 'nowrap', background: 'var(--primary)', color: '#000' }}>💾 {t('saveScore')}</button>
+                      <button onClick={handleClearResult} style={{ flex: 1, padding: '10px 10px', whiteSpace: 'nowrap', background: 'rgba(255,50,50,0.12)', color: '#ff5555', border: '1px solid rgba(255,50,50,0.25)', borderRadius: '8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.82rem' }}>
+                        🗑️ {t('clear') || 'Clear'}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', textAlign: 'center', margin: 0, padding: '10px' }}>
+                    {lang === 'hr' ? 'Izaberite utakmicu iz popisa lijevo.' : 'Select a match from the list on the left.'}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
           <div className="glass-card" style={{ ...cs, borderColor: 'rgba(255,50,50,0.15)' }}>
@@ -970,7 +1243,11 @@ export default function AdminPanel() {
           <div className="glass-card" style={cs}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', flexWrap: 'wrap', gap: '10px' }}>
               <h3 style={{ color: 'var(--primary)', margin: 0 }}>📊 {lang === 'hr' ? 'Uredi statistiku igrača' : 'Edit Player Stats'} — {competition.shortName}</h3>
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: 'var(--text-muted)', cursor: 'pointer', marginRight: '6px' }} title={lang === 'hr' ? 'Ako je označeno, spremanje će ažurirati i službene pobjednike i preračunati bodove na tablici' : 'If checked, saving will also update official global results and recalculate leaderboard points'}>
+                  <input type="checkbox" checked={updateLeaderboardOnStatsSave} onChange={e => setUpdateLeaderboardOnStatsSave(e.target.checked)} style={{ cursor: 'pointer' }} />
+                  {lang === 'hr' ? 'Preračunaj i poredak' : 'Update leaderboard'}
+                </label>
                 <button onClick={loadPlayerStats} className="btn-primary" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>🔄 {lang === 'hr' ? 'Učitaj' : 'Load'}</button>
                 <button onClick={savePlayerStats} className="btn-primary" style={{ padding: '8px 16px', fontSize: '0.85rem', background: 'var(--primary)', color: '#000' }}>💾 {lang === 'hr' ? 'Spremi' : 'Save'}</button>
               </div>
@@ -982,11 +1259,51 @@ export default function AdminPanel() {
                           ['assists', '🎯', lang === 'hr' ? 'Asistenti' : 'Top Assists'],
                           ['cleanSheets', '🧤', lang === 'hr' ? 'Vratari (čiste mreže)' : 'Goalkeepers (clean sheets)']].map(([cat, icon, label]) => (
             <div key={cat} className="glass-card" style={{ ...cs, marginTop: '10px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
                 <h4 style={{ color: 'var(--primary)', margin: 0, fontSize: '0.9rem' }}>{icon} {label}</h4>
-                <button onClick={() => addStatRow(cat)} className="btn-primary" style={{ padding: '5px 12px', fontSize: '0.8rem' }}>+ {lang === 'hr' ? 'Dodaj' : 'Add'}</button>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button onClick={() => { setImportingCat(cat); setImportText(''); }} className="btn-outline" style={{ padding: '5px 12px', fontSize: '0.8rem', borderColor: 'var(--secondary)', color: 'var(--secondary)' }}>📋 {lang === 'hr' ? 'Brzi uvoz' : 'Quick Import'}</button>
+                  <button onClick={() => addStatRow(cat)} className="btn-primary" style={{ padding: '5px 12px', fontSize: '0.8rem' }}>+ {lang === 'hr' ? 'Dodaj' : 'Add'}</button>
+                </div>
               </div>
-              {editStats[cat].length === 0 && <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{lang === 'hr' ? 'Nema podataka. Klikni + Dodaj.' : 'No data. Click + Add.'}</p>}
+
+              {importingCat === cat && (
+                <div style={{ background: 'rgba(255,255,255,0.04)', padding: '12px', borderRadius: '8px', marginBottom: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    {lang === 'hr' 
+                      ? 'Zalijepite tekst (jedna stavka po redu, npr. "1. Harry Kane (Engleska) 6" ili "Kylian Mbappe, Francuska, 5"):'
+                      : 'Paste stats (one entry per line, e.g. "1. Harry Kane (England) 6" or "Kylian Mbappe, France, 5"):'}
+                  </label>
+                  <textarea 
+                    className="input-glass"
+                    value={importText}
+                    onChange={e => setImportText(e.target.value)}
+                    placeholder={lang === 'hr' ? 'Zalijepite ovdje...' : 'Paste here...'}
+                    style={{ width: '100%', height: '100px', fontSize: '0.8rem', fontFamily: 'monospace', padding: '6px 10px', marginBottom: '8px' }}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                    <button onClick={() => setImportingCat(null)} className="btn-outline" style={{ padding: '4px 10px', fontSize: '0.75rem' }}>{t('cancel')}</button>
+                    <button 
+                      onClick={() => {
+                        const parsed = parsePastedStats(importText);
+                        if (parsed.length > 0) {
+                          setEditStats(prev => ({ ...prev, [cat]: [...prev[cat], ...parsed] }));
+                          showMsg(lang === 'hr' ? `✅ Uvezeno ${parsed.length} stavki!` : `✅ Imported ${parsed.length} entries!`);
+                        } else {
+                          alert(lang === 'hr' ? 'Nije pronađena valjana statistika za uvoz. Provjerite format.' : 'No valid stats found to import. Check format.');
+                        }
+                        setImportingCat(null);
+                      }} 
+                      className="btn-primary" 
+                      style={{ padding: '4px 14px', fontSize: '0.75rem', background: 'var(--primary)', color: '#000' }}
+                    >
+                      {lang === 'hr' ? 'Uvezi' : 'Import'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {editStats[cat].length === 0 && <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{lang === 'hr' ? 'Nema podataka. Klikni + Dodaj ili Brzi uvoz.' : 'No data. Click + Add or Quick Import.'}</p>}
               {[...editStats[cat]].sort((a, b) => (b.count || 0) - (a.count || 0)).map((row, idx) => {
                 const realIdx = editStats[cat].indexOf(row);
                 return (

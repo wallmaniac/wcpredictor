@@ -115,6 +115,51 @@ function isSamePlayer(p1, p2) {
   return false;
 }
 
+function levenshteinDistance(a, b) {
+  const tmp = [];
+  let i, j;
+  for (i = 0; i <= a.length; i++) {
+    tmp.push([i]);
+  }
+  for (j = 0; j <= b.length; j++) {
+    tmp[0][j] = j;
+  }
+  for (i = 1; i <= a.length; i++) {
+    for (j = 1; j <= b.length; j++) {
+      tmp[i][j] = Math.min(
+        tmp[i - 1][j] + 1,
+        tmp[i][j - 1] + 1,
+        tmp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+  }
+  return tmp[a.length][b.length];
+}
+
+function areNamesSimilar(pick, act) {
+  const p = removeDiacritics(pick).replace(/[^a-z0-9]/g, '');
+  const a = removeDiacritics(act).replace(/[^a-z0-9]/g, '');
+  if (p === a) return true;
+  if (p.length < 3 || a.length < 3) return false;
+  
+  const dist = levenshteinDistance(p, a);
+  const allowedError = a.length >= 6 ? 2 : 1;
+  if (dist <= allowedError) return true;
+
+  const pWords = removeDiacritics(pick).split(/\s+/).filter(w => w.length >= 3);
+  const aWords = removeDiacritics(act).split(/\s+/).filter(w => w.length >= 3);
+  for (const pw of pWords) {
+    for (const aw of aWords) {
+      if (pw === aw) return true;
+      const wDist = levenshteinDistance(pw, aw);
+      const wAllowed = aw.length >= 6 ? 2 : 1;
+      if (wDist <= wAllowed) return true;
+    }
+  }
+  
+  return false;
+}
+
 function isGlobalPickMatch(userPick, actualResult) {
   if (!userPick || !actualResult) return false;
   
@@ -126,6 +171,7 @@ function isGlobalPickMatch(userPick, actualResult) {
   const actuals = actualNorm.split(',').map(s => s.trim()).filter(Boolean);
   for (const act of actuals) {
     if (pickNorm === act) return true;
+    if (areNamesSimilar(userPick.toString(), act)) return true;
     
     const pickWords = pickNorm.split(/\s+/).filter(Boolean);
     const actWords = act.split(/\s+/).filter(Boolean);

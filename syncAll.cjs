@@ -267,15 +267,8 @@ async function recalculateAllPoints() {
       }
     }
 
-    // Global picks bonus points
-    const gPicks = plUsers[uid]?.globalPicks || {};
-
-    if (isGlobalPickMatch(gPicks.champion, actualGlobals.champion)) totalPoints += 10;
-    if (isGlobalPickMatch(gPicks.secondPlace, actualGlobals.secondPlace)) totalPoints += 5;
-    if (isGlobalPickMatch(gPicks.thirdPlace, actualGlobals.thirdPlace)) totalPoints += 5;
-    if (isGlobalPickMatch(gPicks.topScorer, actualGlobals.topScorer)) totalPoints += 5;
-    if (isGlobalPickMatch(gPicks.topHighlight || gPicks.topAssist, actualGlobals.topAssist)) totalPoints += 5;
-    if (isGlobalPickMatch(gPicks.topGoalkeeper, actualGlobals.topGoalkeeper)) totalPoints += 5;
+    // Global picks bonus points (excluded as requested)
+    // No points awarded for global predictions
 
     updates[`pl2526/users/${uid}/totalPoints`] = totalPoints;
     updates[`pl2526/users/${uid}/exactScores`] = exactScoresCount;

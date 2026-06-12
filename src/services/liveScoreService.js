@@ -949,42 +949,11 @@ export async function recalculateAllPoints(competitionId = 'wc2026') {
       }
     }
 
-    // Global picks bonus points (both WC and PL)
-    let gPicks;
-    if (competitionId === 'wc2026') {
-      gPicks = allUsers[uid].globalPicks || {};
-    } else {
-      gPicks = plUsers[uid]?.globalPicks || {};
-    }
-
+    // Global picks bonus points (both WC and PL) - Excluded from leaderboard calculations as requested
     let globalPickPoints = 0;
     const globalPickResults = {};
 
-    const globalChecks = [
-      { key: 'champion', pick: gPicks.champion, actual: actualGlobals.champion, pts: 10 },
-      { key: 'secondPlace', pick: gPicks.secondPlace, actual: actualGlobals.secondPlace, pts: 5 },
-      { key: 'thirdPlace', pick: gPicks.thirdPlace, actual: actualGlobals.thirdPlace, pts: 5 },
-      { key: 'topScorer', pick: gPicks.topScorer, actual: actualGlobals.topScorer, pts: 5 },
-      { key: 'topAssist', pick: gPicks.topAssist || gPicks.topHighlight, actual: actualGlobals.topAssist, pts: 5 },
-      { key: 'topGoalkeeper', pick: gPicks.topGoalkeeper, actual: actualGlobals.topGoalkeeper, pts: 5 },
-    ];
-
-    for (const check of globalChecks) {
-      const correct = check.actual && check.pick && isGlobalPickMatch(check.pick, check.actual);
-      if (correct) globalPickPoints += check.pts;
-      // Store result for each category (only if actual result exists)
-      if (check.actual) {
-        globalPickResults[check.key] = {
-          pick: check.pick || '',
-          actual: check.actual,
-          correct: !!correct,
-          points: correct ? check.pts : 0,
-          maxPoints: check.pts,
-        };
-      }
-    }
-
-    const totalPoints = matchPoints + globalPickPoints;
+    const totalPoints = matchPoints;
 
     updates[`${config.fbPath}/users/${uid}/totalPoints`] = totalPoints;
     updates[`${config.fbPath}/users/${uid}/matchPoints`] = matchPoints;

@@ -85,6 +85,7 @@ export default function Navbar() {
                 👤 {userName}
               </button>
               <button onClick={() => switchTab('rules')} className="btn-outline nav-logout-btn" style={{ fontSize: '0.82rem' }}>📖 {t('rulesTab')}</button>
+              <button onClick={() => window.location.reload()} className="btn-outline nav-logout-btn" style={{ fontSize: '0.82rem', padding: '4px 8px', minWidth: 'unset' }} title={lang === 'hr' ? 'Osvježi stranicu' : 'Reload Page'}>🔄</button>
               <button onClick={() => signOut(auth)} className="btn-outline nav-logout-btn">{t('logout')}</button>
             </>
           ) : (
@@ -128,6 +129,10 @@ export default function Navbar() {
                     style={{ color: 'var(--primary)' }}>🔧 {t('adminPanel')}</button>
                 )}
                 <div className="mobile-menu-divider" />
+                <button onClick={() => { window.location.reload(); }}
+                  className="mobile-menu-link" style={{ color: 'var(--text-muted)' }}>
+                  🔄 {lang === 'hr' ? 'Osvježi stranicu' : 'Reload Page'}
+                </button>
                 <button onClick={() => { signOut(auth); setMobileMenuOpen(false); }}
                   className="mobile-menu-link mobile-menu-logout">
                   🚪 {t('logout')}

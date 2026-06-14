@@ -11,10 +11,10 @@
  * Actions: get_events (matches), get_standings, get_topscorers
  */
 
-import { database } from '../config/firebase';
+import { database } from '../config/firebase.js';
 import { ref, update, get, set } from 'firebase/database';
-import { ALL_MATCHES, calculatePoints } from '../utils/matchData';
-import { PL_2526_MATCHES, calculatePLPoints } from '../utils/plMatchData';
+import { ALL_MATCHES, calculatePoints } from '../utils/matchData.js';
+import { PL_2526_MATCHES, calculatePLPoints } from '../utils/plMatchData.js';
 
 const BASE_URL = 'https://apiv3.apifootball.com/';
 
@@ -924,6 +924,14 @@ export async function recalculateAllPoints(competitionId = 'wc2026') {
   const globalMetaSnap = await get(ref(database, metaPath));
   const actualGlobals = globalMetaSnap.val() || {};
 
+  const getResult = (s1, s2) => {
+    if (s1 > s2) return 'W';
+    if (s1 < s2) return 'L';
+    return 'D';
+  };
+
+
+
   for (const uid in allUsers) {
     let matchPoints = 0;
     let exactScoresCount = 0;
@@ -949,11 +957,38 @@ export async function recalculateAllPoints(competitionId = 'wc2026') {
       }
     }
 
-    // Global picks bonus points (both WC and PL) - Excluded from leaderboard calculations as requested
+    // Global picks bonus points (both WC and PL)
     let globalPickPoints = 0;
     const globalPickResults = {};
 
-    const totalPoints = matchPoints;
+    let gPicks = competitionId === 'wc2026'
+      ? (allUsers[uid].globalPicks || {})
+      : (plUsers[uid]?.globalPicks || {});
+
+    const globalChecks = [
+      { key: 'champion', pick: gPicks.champion, actual: actualGlobals.champion, pts: 10 },
+      { key: 'secondPlace', pick: gPicks.secondPlace, actual: actualGlobals.secondPlace, pts: 5 },
+      { key: 'thirdPlace', pick: gPicks.thirdPlace, actual: actualGlobals.thirdPlace, pts: 5 },
+      { key: 'topScorer', pick: gPicks.topScorer, actual: actualGlobals.topScorer, pts: 5 },
+      { key: 'topHighlight', pick: gPicks.topAssist || gPicks.topHighlight, actual: actualGlobals.topAssist, pts: 5 },
+      { key: 'topGoalkeeper', pick: gPicks.topGoalkeeper, actual: actualGlobals.topGoalkeeper, pts: 5 },
+    ];
+
+    for (const check of globalChecks) {
+      const correct = check.actual && check.pick && isGlobalPickMatch(check.pick, check.actual);
+      if (correct) globalPickPoints += check.pts;
+      if (check.actual) {
+        globalPickResults[check.key] = {
+          pick: check.pick || '',
+          actual: check.actual,
+          correct: !!correct,
+          points: correct ? check.pts : 0,
+          maxPoints: check.pts,
+        };
+      }
+    }
+
+    const totalPoints = matchPoints + globalPickPoints;
 
     updates[`${config.fbPath}/users/${uid}/totalPoints`] = totalPoints;
     updates[`${config.fbPath}/users/${uid}/matchPoints`] = matchPoints;

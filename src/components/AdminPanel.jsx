@@ -47,7 +47,7 @@ function removeDiacritics(str) {
 
 
 export default function AdminPanel() {
-  const { currentUser, isSuperAdmin } = useAuth();
+  const { currentUser, isAdmin, isSuperAdmin } = useAuth();
   const { t, tt, ts, lang } = useLanguage();
   const { competition } = useCompetition();
   const [adminTab, setAdminTab] = useState('scores');
@@ -152,7 +152,7 @@ export default function AdminPanel() {
           const merged = { ...prev };
           Object.entries(all).forEach(([uid, u]) => {
             if (merged[uid]) {
-              merged[uid] = { ...merged[uid], globalPicks: u.globalPicks || {}, globalPicksLocked: u.globalPicksLocked || false };
+              merged[uid] = { ...merged[uid], globalPicks: u.globalPicks || {}, globalPicksLocked: u.globalPicksLocked };
             }
           });
           return merged;
@@ -285,18 +285,29 @@ export default function AdminPanel() {
     } else {
       newRole = 'admin';
     }
-    await update(ref(database, `wc2026/users/${uid}`), { role: newRole });
-    if (newRole === 'admin' || newRole === 'superadmin') await set(ref(database, `admins/${uid}`), true);
-    else await remove(ref(database, `admins/${uid}`));
-    showMsg(`${users[uid]?.displayName || uid}: role → ${newRole}`);
+    try {
+      await update(ref(database, `wc2026/users/${uid}`), { role: newRole });
+      if (newRole === 'admin' || newRole === 'superadmin') await set(ref(database, `admins/${uid}`), true);
+      else await remove(ref(database, `admins/${uid}`));
+      showMsg(`${users[uid]?.displayName || uid}: role → ${newRole}`);
+    } catch (err) {
+      console.error(err);
+      showMsg(`❌ Error: ${err.message}`);
+    }
   };
 
   const handleDeleteUser = async (uid) => {
     if (!window.confirm(t('deleteConfirm'))) return;
-    await remove(ref(database, `wc2026/users/${uid}`));
-    await remove(ref(database, `admins/${uid}`));
-    for (const lid in leagues) {
-      if (leagues[lid].members?.[uid]) await remove(ref(database, `wc2026/leagues/${lid}/members/${uid}`));
+    try {
+      await remove(ref(database, `wc2026/users/${uid}`));
+      await remove(ref(database, `admins/${uid}`));
+      for (const lid in leagues) {
+        if (leagues[lid].members?.[uid]) await remove(ref(database, `wc2026/leagues/${lid}/members/${uid}`));
+      }
+      showMsg(lang === 'hr' ? '🗑️ Korisnik obrisan!' : '🗑️ User deleted!');
+    } catch (err) {
+      console.error(err);
+      showMsg(`❌ Error: ${err.message}`);
     }
   };
 
@@ -559,7 +570,7 @@ export default function AdminPanel() {
       const compSnap = await get(ref(database, `${fbPath}/users/${uid}`));
       if (compSnap.exists()) {
         const compData = compSnap.val();
-        data = { ...data, lockedMatches: compData.lockedMatches || {}, lockedDays: compData.lockedDays || {}, globalPicks: compData.globalPicks || {}, globalPicksLocked: compData.globalPicksLocked || false };
+        data = { ...data, lockedMatches: compData.lockedMatches || {}, lockedDays: compData.lockedDays || {}, globalPicks: compData.globalPicks || {}, globalPicksLocked: compData.globalPicksLocked };
       }
     } catch (e) { console.error(e); }
     setSelectedUser({ uid, data });
@@ -579,14 +590,30 @@ export default function AdminPanel() {
   const handleUnlockAllDays = async (uid) => {
     const confirmMsg = lang === 'hr' ? '⚠️ Otključati SVA predviđanja za ovog korisnika?' : '⚠️ Unlock ALL predictions for this user?';
     if (!window.confirm(confirmMsg)) return;
-    await remove(ref(database, `${fbPath}/users/${uid}/lockedDays`));
-    await remove(ref(database, `${fbPath}/users/${uid}/lockedMatches`));
-    showMsg(lang === 'hr' ? '🔓 Sva zaključavanja uklonjena!' : '🔓 All locks removed!');
+    try {
+      await remove(ref(database, `${fbPath}/users/${uid}/lockedDays`));
+      await remove(ref(database, `${fbPath}/users/${uid}/lockedMatches`));
+      showMsg(lang === 'hr' ? '🔓 Sva zaključavanja uklonjena!' : '🔓 All locks removed!');
+    } catch (err) {
+      console.error(err);
+      showMsg(`❌ Error: ${err.message}`);
+    }
   };
 
   const loadUserPreds = async (uid, path) => {
     const predSnap = await get(ref(database, `${path}/users/${uid}/predictions`));
-    setUserPreds(predSnap.exists() ? predSnap.val() : {});
+    let data = {};
+    if (predSnap.exists()) {
+      const val = predSnap.val();
+      if (Array.isArray(val)) {
+        val.forEach((item, idx) => {
+          if (item) data[idx] = item;
+        });
+      } else {
+        data = val || {};
+      }
+    }
+    setUserPreds(data);
   };
 
   const handleAdminSaveProfile = async () => {
@@ -606,9 +633,27 @@ export default function AdminPanel() {
     if (!selectedUser || s1 === '' || s2 === '') return;
     const compId = userViewComp;
     const path = compId === 'wc2026' ? 'wc2026' : 'pl2526';
-    await saveAdminPredictionExternal(database, path, selectedUser.uid, matchNum, s1, s2);
-    setUserPreds(p => ({ ...p, [matchNum]: { score1: parseInt(s1), score2: parseInt(s2) } }));
-    await recalculateAllPoints(compId);
+    
+    // Optimistically update local state synchronously first
+    setUserPreds(p => ({
+      ...p,
+      [matchNum]: {
+        ...(p[matchNum] || {}),
+        score1: parseInt(s1, 10),
+        score2: parseInt(s2, 10),
+        editedByAdmin: true
+      }
+    }));
+
+    try {
+      await saveAdminPredictionExternal(database, path, selectedUser.uid, matchNum, s1, s2);
+      await recalculateAllPoints(compId);
+    } catch (err) {
+      console.error(err);
+      showMsg(`❌ Error: ${err.message}`);
+      // Revert local state to matches database on failure
+      await loadUserPreds(selectedUser.uid, path);
+    }
   };
 
   const handleSwitchUserComp = async (compId) => {
@@ -631,7 +676,7 @@ export default function AdminPanel() {
             lockedMatches: compData.lockedMatches || {},
             lockedDays: compData.lockedDays || {},
             globalPicks: compData.globalPicks || {},
-            globalPicksLocked: compData.globalPicksLocked || false,
+            globalPicksLocked: compData.globalPicksLocked,
           }
         }));
       }
@@ -927,13 +972,16 @@ export default function AdminPanel() {
                   <th style={{ textAlign: 'left', padding: '8px 4px' }}>{t('player')}</th>
                   <th style={{ textAlign: 'left', padding: '8px 4px' }}>{t('email')}</th>
                   <th style={{ textAlign: 'center', padding: '8px 4px' }}>{t('role')}</th>
-                  {isSuperAdmin && <th style={{ textAlign: 'right', padding: '8px 4px' }}>{t('actions')}</th>}
+                  {isAdmin && <th style={{ textAlign: 'right', padding: '8px 4px' }}>{t('actions')}</th>}
                 </tr></thead>
                 <tbody>
                   {Object.entries(users).sort((a,b) => (b[1].totalPoints||0) - (a[1].totalPoints||0)).map(([uid, user]) => {
                     const isSuper = user.role === 'superadmin' || user.email === 'admin@wc2026.com';
                     const isAdm = user.role === 'admin';
                     const lockCount = allUserLocks[uid] ? Object.keys(allUserLocks[uid]).length : 0;
+                    const targetStart = isWC ? new Date('2026-06-11T19:00:00Z') : new Date('2025-08-16T00:00:00Z');
+                    const isAfterStart = Date.now() >= targetStart.getTime();
+                    const isGlobalLocked = user.globalPicksLocked === true || (isAfterStart && user.globalPicksLocked !== false);
                     return (
                       <tr key={uid} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer' }} onClick={() => handleOpenUser(uid)}>
                         <td style={{ padding: '8px 4px' }}>{user.flag || '🌍'} <b>{user.displayName || 'Unknown'}</b>{user.hidden && <span style={{ marginLeft: '6px', fontSize: '0.78rem', color: '#ff5555' }} title="Hidden from other users">👻</span>}</td>
@@ -943,8 +991,9 @@ export default function AdminPanel() {
                           {isAdm && !isSuper && <span style={{ background: 'rgba(0,255,136,0.1)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem' }}>Admin</span>}
                           {!isAdm && !isSuper && <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{t('player')}</span>}
                           {lockCount > 0 && <span style={{ marginLeft: '4px', background: 'rgba(255,184,0,0.1)', color: '#FFB800', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem' }}>🔒 {lockCount}{isWC ? (lang === 'hr' ? 'u' : 'm') : (lang === 'hr' ? 'd' : 'd')}</span>}
+                          {isGlobalLocked && <span style={{ marginLeft: '4px', background: 'rgba(144,76,255,0.15)', color: 'var(--secondary)', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem' }}>🌍🔒</span>}
                         </td>
-                      {isSuperAdmin && (
+                        {isAdmin && (
                           <td style={{ padding: '8px 4px', textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                             <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center' }}>
                               <button onClick={() => handleOpenUser(uid)} className="btn-outline" style={{ padding: '3px 8px', fontSize: '0.7rem' }}>👁️</button>
@@ -983,15 +1032,21 @@ export default function AdminPanel() {
                               )}
                               {uid !== currentUser.uid && (!isSuper || isSuperAdmin) && (
                                   <>
-                                    <button onClick={async (e) => {
+                                    {isGlobalLocked && <button onClick={async (e) => {
                                       e.stopPropagation();
                                       const confirmGlobalMsg = lang === 'hr'
                                         ? `⚠️ Jeste li sigurni da želite otključati globalna predviđanja za korisnika ${users[uid]?.displayName || 'ovog korisnika'}?`
                                         : `⚠️ Are you sure you want to unlock global predictions for ${users[uid]?.displayName || 'this user'}?`;
                                       if (!window.confirm(confirmGlobalMsg)) return;
-                                      await remove(ref(database, `${fbPath}/users/${uid}/globalPicksLocked`));
-                                      showMsg(lang === 'hr' ? `🔓 Otključana globalna predviđanja za ${users[uid]?.displayName || 'korisnika'}` : `🔓 Unlocked global picks for ${users[uid]?.displayName || 'user'}`);
-                                    }} style={{ background: 'rgba(144,76,255,0.15)', color: 'var(--secondary)', border: '1px solid rgba(144,76,255,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.65rem', cursor: 'pointer' }} title={lang === 'hr' ? "Otključaj globalna predviđanja" : "Unlock Global Picks"}>🌍🔓</button>
+                                      try {
+                                        await set(ref(database, `${fbPath}/users/${uid}/globalPicksLocked`), false);
+                                        setUsers(prev => ({ ...prev, [uid]: { ...prev[uid], globalPicksLocked: false } }));
+                                        showMsg(lang === 'hr' ? `🔓 Otključana globalna predviđanja za ${users[uid]?.displayName || 'korisnika'}` : `🔓 Unlocked global picks for ${users[uid]?.displayName || 'user'}`);
+                                      } catch (err) {
+                                        console.error(err);
+                                        showMsg(`❌ Error: ${err.message}`);
+                                      }
+                                    }} style={{ background: 'rgba(144,76,255,0.15)', color: 'var(--secondary)', border: '1px solid rgba(144,76,255,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.65rem', cursor: 'pointer' }} title={lang === 'hr' ? "Otključaj globalna predviđanja" : "Unlock Global Picks"}>🌍🔓</button>}
                                     <button
                                       onClick={(e) => { e.stopPropagation(); handleTriggerPasswordReset(user.email, user.displayName); }}
                                       style={{ background: 'rgba(0,180,255,0.15)', color: '#00b4ff', border: '1px solid rgba(0,180,255,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.65rem', cursor: 'pointer' }}
@@ -999,8 +1054,12 @@ export default function AdminPanel() {
                                     >
                                       🔑
                                     </button>
-                                    <button onClick={() => handleToggleAdmin(uid)} className="btn-outline" style={{ padding: '3px 8px', fontSize: '0.7rem' }}>{isSuper ? '→User' : isAdm ? (isSuperAdmin ? '→Super' : '→User') : '+Admin'}</button>
-                                    <button onClick={() => handleDeleteUser(uid)} style={{ background: 'rgba(255,50,50,0.15)', color: '#FF5555', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.7rem', cursor: 'pointer' }}>🗑️</button>
+                                    {isSuperAdmin && (
+                                      <>
+                                        <button onClick={() => handleToggleAdmin(uid)} className="btn-outline" style={{ padding: '3px 8px', fontSize: '0.7rem' }}>{isSuper ? '→User' : isAdm ? (isSuperAdmin ? '→Super' : '→User') : '+Admin'}</button>
+                                        <button onClick={() => handleDeleteUser(uid)} style={{ background: 'rgba(255,50,50,0.15)', color: '#FF5555', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.7rem', cursor: 'pointer' }}>🗑️</button>
+                                      </>
+                                    )}
                                   </>
                                 )}
                               </div>
@@ -1018,6 +1077,9 @@ export default function AdminPanel() {
                   const isSuper = user.role === 'superadmin' || user.email === 'admin@wc2026.com';
                   const isAdm = user.role === 'admin';
                   const lockCount = allUserLocks[uid] ? Object.keys(allUserLocks[uid]).length : 0;
+                  const targetStart = isWC ? new Date('2026-06-11T19:00:00Z') : new Date('2025-08-16T00:00:00Z');
+                  const isAfterStart = Date.now() >= targetStart.getTime();
+                  const isGlobalLocked = user.globalPicksLocked === true || (isAfterStart && user.globalPicksLocked !== false);
                   return (
                     <div key={uid} className="user-card-mobile" onClick={() => handleOpenUser(uid)} style={{ cursor: 'pointer' }}>
                       <div className="user-card-info">
@@ -1028,6 +1090,7 @@ export default function AdminPanel() {
                           {isAdm && !isSuper && <span style={{ background: 'rgba(0,255,136,0.1)', color: 'var(--primary)', padding: '1px 6px', borderRadius: '4px', fontSize: '0.65rem' }}>Admin</span>}
                           {!isAdm && !isSuper && <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{t('player')}</span>}
                           {lockCount > 0 && <span style={{ background: 'rgba(255,184,0,0.1)', color: '#FFB800', padding: '1px 6px', borderRadius: '4px', fontSize: '0.65rem' }}>🔒 {lockCount}{isWC ? (lang === 'hr' ? 'u' : 'm') : (lang === 'hr' ? 'd' : 'd')}</span>}
+                          {isGlobalLocked && <span style={{ background: 'rgba(144,76,255,0.15)', color: 'var(--secondary)', padding: '1px 6px', borderRadius: '4px', fontSize: '0.65rem' }}>🌍🔒</span>}
                         </div>
                       </div>
                       <div className="user-card-actions" onClick={e => e.stopPropagation()}>
@@ -1035,8 +1098,23 @@ export default function AdminPanel() {
                         {lockCount > 0 && (
                           <button onClick={() => handleOpenUser(uid)} style={{ background: 'rgba(255,184,0,0.15)', color: '#FFB800', border: '1px solid rgba(255,184,0,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.68rem', cursor: 'pointer' }}>🔒 {lockCount}{isWC ? (lang === 'hr' ? 'u' : 'm') : (lang === 'hr' ? 'd' : 'd')}</button>
                         )}
-                        {isSuperAdmin && uid !== currentUser.uid && (!isSuper || isSuperAdmin) && (
+                        {uid !== currentUser.uid && (!isSuper || isSuperAdmin) && (
                           <>
+                            {isGlobalLocked && <button onClick={async (e) => {
+                              e.stopPropagation();
+                              const confirmGlobalMsg = lang === 'hr'
+                                ? `⚠️ Jeste li sigurni da želite otključati globalna predviđanja za korisnika ${users[uid]?.displayName || 'ovog korisnika'}?`
+                                : `⚠️ Are you sure you want to unlock global predictions for ${users[uid]?.displayName || 'this user'}?`;
+                              if (!window.confirm(confirmGlobalMsg)) return;
+                              try {
+                                await set(ref(database, `${fbPath}/users/${uid}/globalPicksLocked`), false);
+                                setUsers(prev => ({ ...prev, [uid]: { ...prev[uid], globalPicksLocked: false } }));
+                                showMsg(lang === 'hr' ? `🔓 Otključana globalna predviđanja za ${users[uid]?.displayName || 'korisnika'}` : `🔓 Unlocked global picks for ${users[uid]?.displayName || 'user'}`);
+                              } catch (err) {
+                                console.error(err);
+                                showMsg(`❌ Error: ${err.message}`);
+                              }
+                            }} style={{ background: 'rgba(144,76,255,0.15)', color: 'var(--secondary)', border: '1px solid rgba(144,76,255,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.68rem', cursor: 'pointer' }} title={lang === 'hr' ? "Otključaj globalna predviđanja" : "Unlock Global Picks"}>🌍🔓</button>}
                             <button
                               onClick={(e) => { e.stopPropagation(); handleTriggerPasswordReset(user.email, user.displayName); }}
                               style={{ background: 'rgba(0,180,255,0.15)', color: '#00b4ff', border: '1px solid rgba(0,180,255,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.68rem', cursor: 'pointer' }}
@@ -1044,6 +1122,10 @@ export default function AdminPanel() {
                             >
                               🔑
                             </button>
+                          </>
+                        )}
+                        {isSuperAdmin && uid !== currentUser.uid && (!isSuper || isSuperAdmin) && (
+                          <>
                             <button onClick={() => handleToggleAdmin(uid)} className="btn-outline" style={{ padding: '3px 8px', fontSize: '0.68rem' }}>{isSuper ? '→User' : isAdm ? (isSuperAdmin ? '→Super' : '→User') : '+Admin'}</button>
                             <button onClick={() => handleDeleteUser(uid)} style={{ background: 'rgba(255,50,50,0.15)', color: '#FF5555', border: '1px solid rgba(255,50,50,0.3)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.68rem', cursor: 'pointer' }}>🗑️</button>
                           </>
@@ -1361,15 +1443,21 @@ export default function AdminPanel() {
                         {gLocked && <span style={{ fontSize: '0.68rem', background: 'rgba(0,255,136,0.1)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px' }}>🔒 {t('locked')}</span>}
                         {gLocked && (
                           <button onClick={async () => {
-                            const confirmMsg = lang === 'hr' 
-                              ? `Otključati globalna predviđanja za korisnika ${u.displayName || 'korisnik'}?` 
-                              : `Unlock global picks for ${u.displayName || 'user'}?`;
-                            if (!window.confirm(confirmMsg)) return;
-                            await set(ref(database, `${fbPath}/users/${uid}/globalPicksLocked`), false);
-                            const unlockedMsg = lang === 'hr'
-                              ? `🔓 Otključana globalna predviđanja za ${u.displayName || 'korisnik'}`
-                              : `🔓 Unlocked global picks for ${u.displayName || 'user'}`;
-                            showMsg(unlockedMsg);
+                             const confirmMsg = lang === 'hr' 
+                               ? `Otključati globalna predviđanja za korisnika ${u.displayName || 'korisnik'}?` 
+                               : `Unlock global picks for ${u.displayName || 'user'}?`;
+                             if (!window.confirm(confirmMsg)) return;
+                             try {
+                               await set(ref(database, `${fbPath}/users/${uid}/globalPicksLocked`), false);
+                               setUsers(prev => ({ ...prev, [uid]: { ...prev[uid], globalPicksLocked: false } }));
+                               const unlockedMsg = lang === 'hr'
+                                 ? `🔓 Otključana globalna predviđanja za ${u.displayName || 'korisnik'}`
+                                 : `🔓 Unlocked global picks for ${u.displayName || 'user'}`;
+                               showMsg(unlockedMsg);
+                             } catch (err) {
+                               console.error(err);
+                               showMsg(`❌ Error: ${err.message}`);
+                             }
                           }}
                             style={{ background: 'rgba(255,50,50,0.12)', color: '#ff5555', border: '1px solid rgba(255,50,50,0.2)', borderRadius: '4px', padding: '2px 6px', fontSize: '0.65rem', cursor: 'pointer' }}>🔓 {t('unlock')}</button>
                         )}
@@ -1483,41 +1571,55 @@ export default function AdminPanel() {
                 })()}
 
                 {/* User Global Picks */}
-                <div style={{ background: 'rgba(144,76,255,0.04)', borderRadius: '10px', padding: '14px', marginBottom: '15px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <h4 style={{ fontSize: '0.85rem', color: 'var(--secondary)', margin: 0 }}>🌍 {t('globalPredictions')}</h4>
-                    {selectedUser.data?.globalPicksLocked && (
-                      <button onClick={() => {
-                        const confirmMsg = lang === 'hr'
-                          ? `⚠️ Otključati globalna predviđanja za korisnika ${selectedUser.data?.displayName}?`
-                          : `⚠️ Unlock global picks for ${selectedUser.data?.displayName}?`;
-                        if (!window.confirm(confirmMsg)) return;
-                        const compPath = userViewComp === 'wc2026' ? 'wc2026' : 'pl2526';
-                        set(ref(database, `${compPath}/users/${selectedUser.uid}/globalPicksLocked`), false);
-                        setSelectedUser(prev => prev && prev.uid === selectedUser.uid ? {
-                          ...prev,
-                          data: { ...prev.data, globalPicksLocked: false }
-                        } : prev);
-                        showMsg(`🔓 ${t('globalPicksUnlocked')}`);
-                      }} style={{ background: 'rgba(255,50,50,0.12)', color: '#ff5555', border: '1px solid rgba(255,50,50,0.2)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.68rem', cursor: 'pointer' }}>🔓 {t('unlock')}</button>
-                    )}
-                  </div>
-                  {(() => {
-                    const gp = selectedUser.data?.globalPicks || {};
-                    const hasGP = Object.values(gp).some(v => v && String(v).trim());
-                    if (!hasGP) return <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', margin: 0 }}>{t('noGlobalPicksSet')}</p>;
-                    return (
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '0.78rem' }}>
-                        {[['champion','🏆'],['secondPlace','🥈'],['thirdPlace','🥉'],['topScorer','👟'],['topAssist','🎯'],['topGoalkeeper','🧤']].map(([k, icon]) => (
-                          <div key={k} style={{ color: 'var(--text-muted)' }}>
-                            <span style={{ fontWeight: 600 }}>{icon}</span> {gp[k] ? tt(gp[k]) : '—'}
-                          </div>
-                        ))}
+                {(() => {
+                  const targetStart = userViewComp === 'wc2026' ? new Date('2026-06-11T19:00:00Z') : new Date('2025-08-16T00:00:00Z');
+                  const isAfterStart = Date.now() >= targetStart.getTime();
+                  const isGlobalLocked = selectedUser.data?.globalPicksLocked === true || (isAfterStart && selectedUser.data?.globalPicksLocked !== false);
+                  
+                  return (
+                    <div style={{ background: 'rgba(144,76,255,0.04)', borderRadius: '10px', padding: '14px', marginBottom: '15px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                        <h4 style={{ fontSize: '0.85rem', color: 'var(--secondary)', margin: 0 }}>🌍 {t('globalPredictions')}</h4>
+                        {isGlobalLocked && (
+                          <button onClick={async () => {
+                            const confirmMsg = lang === 'hr'
+                              ? `⚠️ Otključati globalna predviđanja za korisnika ${selectedUser.data?.displayName}?`
+                              : `⚠️ Unlock global picks for ${selectedUser.data?.displayName}?`;
+                            if (!window.confirm(confirmMsg)) return;
+                            const compPath = userViewComp === 'wc2026' ? 'wc2026' : 'pl2526';
+                            try {
+                              await set(ref(database, `${compPath}/users/${selectedUser.uid}/globalPicksLocked`), false);
+                              setSelectedUser(prev => prev && prev.uid === selectedUser.uid ? {
+                                ...prev,
+                                data: { ...prev.data, globalPicksLocked: false }
+                              } : prev);
+                              setUsers(prev => ({ ...prev, [selectedUser.uid]: { ...prev[selectedUser.uid], globalPicksLocked: false } }));
+                              showMsg(`🔓 ${t('globalPicksUnlocked')}`);
+                            } catch (err) {
+                              console.error(err);
+                              showMsg(`❌ Error: ${err.message}`);
+                            }
+                          }} style={{ background: 'rgba(255,50,50,0.12)', color: '#ff5555', border: '1px solid rgba(255,50,50,0.2)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.68rem', cursor: 'pointer' }}>🔓 {t('unlock')}</button>
+                        )}
                       </div>
-                    );
-                  })()}
-                  {selectedUser.data?.globalPicksLocked && <span style={{ fontSize: '0.65rem', color: 'var(--primary)', marginTop: '6px', display: 'inline-block' }}>🔒 {t('locked')}</span>}
-                </div>
+                      {(() => {
+                        const gp = selectedUser.data?.globalPicks || {};
+                        const hasGP = Object.values(gp).some(v => v && String(v).trim());
+                        if (!hasGP) return <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', margin: 0 }}>{t('noGlobalPicksSet')}</p>;
+                        return (
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '0.78rem' }}>
+                            {[['champion','🏆'],['secondPlace','🥈'],['thirdPlace','🥉'],['topScorer','👟'],['topAssist','🎯'],['topGoalkeeper','🧤']].map(([k, icon]) => (
+                              <div key={k} style={{ color: 'var(--text-muted)' }}>
+                                <span style={{ fontWeight: 600 }}>{icon}</span> {gp[k] ? tt(gp[k]) : '—'}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                      {isGlobalLocked && <span style={{ fontSize: '0.65rem', color: 'var(--primary)', marginTop: '6px', display: 'inline-block' }}>🔒 {t('locked')}</span>}
+                    </div>
+                  );
+                })()}
 
                 {/* Competition Switcher */}
                 <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
@@ -1646,17 +1748,37 @@ export default function AdminPanel() {
                               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                   <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{t('prediction') || 'Pred.'}:</span>
-                                  <input type="number" min="0" defaultValue={pred?.score1 ?? ''} className="input-glass"
+                                  <input type="number" min="0" value={pred?.score1 ?? ''} className="input-glass"
                                     style={{ width: '36px', padding: '3px', textAlign: 'center', fontSize: '0.8rem' }}
-                                    onBlur={e => handleAdminEditPred(m.matchNumber, e.target.value, document.getElementById(`adm2_${selectedUser.uid}_${m.matchNumber}_s2`)?.value)}
+                                    onChange={e => {
+                                      const val = e.target.value;
+                                      setUserPreds(p => ({
+                                        ...p,
+                                        [m.matchNumber]: {
+                                          ...(p[m.matchNumber] || {}),
+                                          score1: val === '' ? '' : parseInt(val, 10)
+                                        }
+                                      }));
+                                    }}
+                                    onBlur={e => handleAdminEditPred(m.matchNumber, e.target.value, pred?.score2 ?? '')}
                                     id={`adm2_${selectedUser.uid}_${m.matchNumber}_s1`}
-                                    key={`s1_${selectedUser.uid}_${userViewComp}_${m.matchNumber}_${pred?.score1 ?? ''}`} />
+                                    key={`s1_${selectedUser.uid}_${userViewComp}_${m.matchNumber}`} />
                                   <span style={{ color: 'var(--text-muted)' }}>-</span>
-                                  <input type="number" min="0" defaultValue={pred?.score2 ?? ''} className="input-glass"
+                                  <input type="number" min="0" value={pred?.score2 ?? ''} className="input-glass"
                                     style={{ width: '36px', padding: '3px', textAlign: 'center', fontSize: '0.8rem' }}
-                                    onBlur={e => handleAdminEditPred(m.matchNumber, document.getElementById(`adm2_${selectedUser.uid}_${m.matchNumber}_s1`)?.value, e.target.value)}
+                                    onChange={e => {
+                                      const val = e.target.value;
+                                      setUserPreds(p => ({
+                                        ...p,
+                                        [m.matchNumber]: {
+                                          ...(p[m.matchNumber] || {}),
+                                          score2: val === '' ? '' : parseInt(val, 10)
+                                        }
+                                      }));
+                                    }}
+                                    onBlur={e => handleAdminEditPred(m.matchNumber, pred?.score1 ?? '', e.target.value)}
                                     id={`adm2_${selectedUser.uid}_${m.matchNumber}_s2`}
-                                    key={`s2_${selectedUser.uid}_${userViewComp}_${m.matchNumber}_${pred?.score2 ?? ''}`} />
+                                    key={`s2_${selectedUser.uid}_${userViewComp}_${m.matchNumber}`} />
                                 </div>
 
                                 {/* Lock/Unlock toggle for each match */}

@@ -398,12 +398,17 @@ select.input-glass option:hover { background: #2a2a3a; }
 
 /* User cards for mobile */
 .user-card-mobile {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05);
-  gap: 8px; flex-wrap: wrap;
+  display: flex; flex-direction: column; align-items: stretch;
+  padding: 12px 10px; border-bottom: 1px solid rgba(255,255,255,0.05);
+  gap: 10px;
 }
-.user-card-info { flex: 1; min-width: 0; }
-.user-card-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+@media (min-width: 560px) {
+  .user-card-mobile {
+    flex-direction: row; align-items: center; justify-content: space-between;
+  }
+}
+.user-card-info { min-width: 0; overflow-wrap: break-word; word-break: break-word; }
+.user-card-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 
 /* Global Picks */
 .global-picks-card { padding: 20px; max-width: 600px; width: 100%; }

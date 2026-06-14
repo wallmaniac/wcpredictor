@@ -61,8 +61,14 @@ export function formatPLMatchTime(dateStr, utcTime, timezone = 'Europe/Zagreb', 
 
 export function calculatePLPoints(prediction, actual) {
   if (!prediction || !actual || actual.status !== 'finished') return 0;
-  if (prediction.score1 === actual.score1 && prediction.score2 === actual.score2) return 3;
-  const predDiff = prediction.score1 - prediction.score2;
+  const p1 = prediction.score1;
+  const p2 = prediction.score2;
+  if (p1 === undefined || p1 === null || p1 === '' ||
+      p2 === undefined || p2 === null || p2 === '') {
+    return 0;
+  }
+  if (p1 === actual.score1 && p2 === actual.score2) return 3;
+  const predDiff = p1 - p2;
   const actDiff = actual.score1 - actual.score2;
   if ((predDiff > 0 && actDiff > 0) || (predDiff < 0 && actDiff < 0) || (predDiff === 0 && actDiff === 0)) return 1;
   return 0;

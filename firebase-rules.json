@@ -2,7 +2,7 @@
   "rules": {
     "admins": {
       ".read": "auth != null",
-      ".write": "auth != null && auth.token.email === 'admin@wc2026.com'"
+      ".write": "auth != null && (root.child('wc2026/users/' + auth.uid + '/role').val() === 'superadmin' || root.child('admins/' + auth.uid).exists() || auth.token.email === 'admin@wc2026.com')"
     },
     "wc2026": {
       ".read": "auth != null",

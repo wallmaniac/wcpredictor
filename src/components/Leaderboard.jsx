@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { database } from '../config/firebase';
 import { ref, onValue, get, set } from 'firebase/database';
@@ -22,7 +22,6 @@ async function saveAdminPredictionLeaderboardExternal(database, fbPath, uid, mn,
 // Static start dates to prevent recreating Date objects on every render pass
 const WC_START_DATE = new Date('2026-06-11T19:00:00Z');
 const PL_START_DATE = new Date('2025-08-16T00:00:00Z');
-
 export default function Leaderboard() {
   const { t, tt, lang } = useLanguage();
   const { currentUser, isAdmin } = useAuth();
@@ -55,6 +54,22 @@ export default function Leaderboard() {
   const [now, setNow] = useState(() => Date.now());
   const [recalculating, setRecalculating] = useState(false);
   const [recalcMsg, setRecalcMsg] = useState(null);
+  const [modalTab, setModalTab] = useState('matches'); // 'matches' or 'global'
+  const modalScrollContainerRef = useRef(null);
+
+  useEffect(() => {
+    if (viewingUser && !loadingPreds && modalTab === 'matches') {
+      const timer = setTimeout(() => {
+        if (modalScrollContainerRef.current) {
+          const todayRow = modalScrollContainerRef.current.querySelector('.pred-row-today');
+          if (todayRow) {
+            todayRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [viewingUser, loadingPreds, modalTab]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -115,13 +130,15 @@ export default function Leaderboard() {
     return () => { u1(); u1b(); u2(); u3(); u4(); u4b(); u5(); window.removeEventListener('select-league', h); };
   }, [fbPath, isWC, currentUser]);
 
-  const visibleUsers = users.filter(u => !u.hidden || u.uid === currentUser?.uid);
-  const sorted = [...visibleUsers].sort((a, b) => b.points !== a.points ? b.points - a.points : b.exact - a.exact);
-  let filtered = sorted;
-  if (selectedLeague !== 'all') {
-    const league = leagues[selectedLeague];
-    if (league?.members) filtered = sorted.filter(u => Object.keys(league.members).includes(u.uid));
-  }
+  const filtered = useMemo(() => {
+    const visibleUsers = users.filter(u => !u.hidden || u.uid === currentUser?.uid);
+    const sorted = [...visibleUsers].sort((a, b) => b.points !== a.points ? b.points - a.points : b.exact - a.exact);
+    if (selectedLeague !== 'all') {
+      const league = leagues[selectedLeague];
+      if (league?.members) return sorted.filter(u => Object.keys(league.members).includes(u.uid));
+    }
+    return sorted;
+  }, [users, currentUser?.uid, selectedLeague, leagues]);
 
   const myLeagues = Object.entries(leagues).filter(([, l]) => l.members?.[currentUser?.uid] || isAdmin).sort((a, b) => (a[1].name || '').localeCompare(b[1].name || ''));
   const isInSameLeague = (uid) => Object.values(leagues).some(l => l.members?.[currentUser?.uid] && l.members?.[uid]);
@@ -153,7 +170,7 @@ export default function Leaderboard() {
   }, [startDate]);
 
   const handleViewPredictions = async (uid, name) => {
-    setLoadingPreds(true); setViewingUser({ uid, name });
+    setLoadingPreds(true); setViewingUser({ uid, name }); setModalTab('matches');
     try {
       const pSnap = await get(ref(database, `${fbPath}/users/${uid}/predictions`));
       setViewingPreds(pSnap.exists() ? pSnap.val() : {});
@@ -199,9 +216,16 @@ export default function Leaderboard() {
     setViewingPreds(p => ({ ...p, [mn]: { score1: parseInt(s1, 10), score2: parseInt(s2, 10) } }));
   };
 
-  const closeModal = () => { setViewingUser(null); setViewingPreds({}); setViewingUserLocks({}); setViewingGlobalPicks(null); setViewingGlobalPickResults(null); };
+  const closeModal = () => { setViewingUser(null); setViewingPreds({}); setViewingUserLocks({}); setViewingGlobalPicks(null); setViewingGlobalPickResults(null); setModalTab('matches'); };
 
-  const finishedMatches = matches.filter(m => matchResults[`match_${m.matchNumber}`]?.status === 'finished');
+  const finishedMatches = matches
+    .filter(m => matchResults[`match_${m.matchNumber}`]?.status === 'finished')
+    .sort((a, b) => {
+      const dateTimeA = `${a.date}T${a.utc || '00:00'}`;
+      const dateTimeB = `${b.date}T${b.utc || '00:00'}`;
+      if (dateTimeA !== dateTimeB) return dateTimeB.localeCompare(dateTimeA);
+      return b.matchNumber - a.matchNumber;
+    });
   const todayKey = new Date().toLocaleDateString('en-CA', { timeZone: userTZ });
   const locale = lang === 'hr' ? 'hr-HR' : 'en-US';
   const fmtTime = isWC ? formatMatchTime : formatPLMatchTime;
@@ -289,7 +313,7 @@ export default function Leaderboard() {
     }
 
     return (
-      <div key={m.matchNumber} style={{
+      <div key={m.matchNumber} id={`pred-row-${m.matchNumber}`} className={isToday ? "pred-row-today" : ""} style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         padding: '10px 14px', borderRadius: '8px', fontSize: '0.85rem', flexWrap: 'wrap', gap: '8px',
         background: rowBg,
@@ -596,14 +620,30 @@ export default function Leaderboard() {
             <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '16px' }}>
               {isAdmin && <span style={{ color: '#FFB800' }}>{t('adminModeEdit')}</span>}
             </p>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '16px', borderBottom: '1px solid var(--glass-border)', paddingBottom: '10px' }}>
+              <button 
+                onClick={() => setModalTab('matches')} 
+                className={modalTab === 'matches' ? 'phase-tab active' : 'phase-tab'}
+                style={{ fontSize: '0.85rem', padding: '6px 12px' }}
+              >
+                ⚽ {lang === 'hr' ? 'Utakmice' : 'Matches'}
+              </button>
+              <button 
+                onClick={() => setModalTab('global')} 
+                className={modalTab === 'global' ? 'phase-tab active' : 'phase-tab'}
+                style={{ fontSize: '0.85rem', padding: '6px 12px' }}
+              >
+                🌍 {lang === 'hr' ? 'Globalna predviđanja' : 'Global Predictions'}
+              </button>
+            </div>
             {loadingPreds ? <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>⏳ {t('loading')}</div>
             : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '65vh', overflowY: 'auto' }}>
+              <div ref={modalScrollContainerRef} style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '65vh', overflowY: 'auto' }}>
                 {/* Global picks with correct/incorrect breakdown */}
-                {renderGlobalPicksSection()}
+                {modalTab === 'global' && renderGlobalPicksSection()}
 
                 {/* Match predictions */}
-                {(() => {
+                {modalTab === 'matches' && (() => {
                   const canView = canViewPredictions(viewingUser.uid);
                   if (!canView) {
                     return (
@@ -635,7 +675,14 @@ export default function Leaderboard() {
                       </div>
                     );
                   }
-                  return visiblePreds.map(m => renderPredRow(m));
+                  // Sort descending (newest match on top)
+                  const sortedVisiblePreds = [...visiblePreds].sort((a, b) => {
+                    const dateTimeA = `${a.date}T${a.utc || '00:00'}`;
+                    const dateTimeB = `${b.date}T${b.utc || '00:00'}`;
+                    if (dateTimeA !== dateTimeB) return dateTimeB.localeCompare(dateTimeA);
+                    return b.matchNumber - a.matchNumber;
+                  });
+                  return sortedVisiblePreds.map(m => renderPredRow(m));
                 })()}
               </div>
             )}

@@ -1037,7 +1037,12 @@ export const FIXTURES_VERSION = "2026-06-12-chronological";
 export const calculatePoints = (prediction, actual) => {
   if (!prediction || !actual) return 0;
   if (actual.status && actual.status !== 'finished') return 0;
-  const p1 = prediction.score1 ?? null, p2 = prediction.score2 ?? null;
+  const p1 = prediction.score1;
+  const p2 = prediction.score2;
+  if (p1 === undefined || p1 === null || p1 === '' ||
+      p2 === undefined || p2 === null || p2 === '') {
+    return 0;
+  }
   const a1 = actual.score1, a2 = actual.score2;
   if (p1 === a1 && p2 === a2) return 3;
   const pr = p1 > p2 ? "W" : p1 < p2 ? "L" : "D";

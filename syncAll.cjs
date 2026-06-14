@@ -198,8 +198,14 @@ const PL_DEFAULT_CLEAN_SHEETS = [
 
 function calculatePLPoints(prediction, actual) {
   if (!prediction || !actual || actual.status !== 'finished') return 0;
-  if (prediction.score1 === actual.score1 && prediction.score2 === actual.score2) return 3;
-  const predDiff = prediction.score1 - prediction.score2;
+  const p1 = prediction.score1;
+  const p2 = prediction.score2;
+  if (p1 === undefined || p1 === null || p1 === '' ||
+      p2 === undefined || p2 === null || p2 === '') {
+    return 0;
+  }
+  if (p1 === actual.score1 && p2 === actual.score2) return 3;
+  const predDiff = p1 - p2;
   const actDiff = actual.score1 - actual.score2;
   if ((predDiff > 0 && actDiff > 0) || (predDiff < 0 && actDiff < 0) || (predDiff === 0 && actDiff === 0)) return 1;
   return 0;
@@ -249,7 +255,7 @@ async function recalculateAllPoints() {
   const updates = {};
 
   for (const uid in allUsers) {
-    let totalPoints = 0;
+    let matchPoints = 0;
     let exactScoresCount = 0;
     let correctResultsCount = 0;
     
@@ -261,23 +267,42 @@ async function recalculateAllPoints() {
       const mNum = mId.replace('match_', '');
       if (m.status === 'finished' && preds[mNum]) {
         const pts = calculatePLPoints(preds[mNum], m);
-        totalPoints += pts;
+        matchPoints += pts;
         if (pts === 3) exactScoresCount++;
         if (pts === 1) correctResultsCount++;
       }
     }
 
-    // Global picks bonus points (excluded as requested)
-    // No points awarded for global predictions
+    // Global picks bonus points
+    const gPicks = plUsers[uid]?.globalPicks || {};
+    let globalPickPoints = 0;
+
+    const globalChecks = [
+      { key: 'champion', pick: gPicks.champion, actual: actualGlobals.champion, pts: 10 },
+      { key: 'secondPlace', pick: gPicks.secondPlace, actual: actualGlobals.secondPlace, pts: 5 },
+      { key: 'thirdPlace', pick: gPicks.thirdPlace, actual: actualGlobals.thirdPlace, pts: 5 },
+      { key: 'topScorer', pick: gPicks.topScorer, actual: actualGlobals.topScorer, pts: 5 },
+      { key: 'topHighlight', pick: gPicks.topAssist || gPicks.topHighlight, actual: actualGlobals.topAssist, pts: 5 },
+      { key: 'topGoalkeeper', pick: gPicks.topGoalkeeper, actual: actualGlobals.topGoalkeeper, pts: 5 },
+    ];
+
+    for (const check of globalChecks) {
+      const correct = check.actual && check.pick && isGlobalPickMatch(check.pick, check.actual);
+      if (correct) globalPickPoints += check.pts;
+    }
+
+    const totalPoints = matchPoints + globalPickPoints;
 
     updates[`pl2526/users/${uid}/totalPoints`] = totalPoints;
+    updates[`pl2526/users/${uid}/matchPoints`] = matchPoints;
+    updates[`pl2526/users/${uid}/globalPickPoints`] = globalPickPoints;
     updates[`pl2526/users/${uid}/exactScores`] = exactScoresCount;
     updates[`pl2526/users/${uid}/correctResults`] = correctResultsCount;
   }
 
   if (Object.keys(updates).length > 0) {
     await update(ref(db), updates);
-    console.log(`   ✅ Recalculated points for ${Object.keys(updates).length / 3} users.`);
+    console.log(`   ✅ Recalculated points for ${Object.keys(updates).length / 5} users.`);
   }
 }
 
@@ -467,24 +492,7 @@ async function main() {
       });
       console.log(`   ✅ Saved standings for ${standings.length} teams.`);
 
-      // Auto-update global results top 3 teams
-      if (standings.length >= 3) {
-        const champion = standings[0].team;
-        const secondPlace = standings[1].team;
-        const thirdPlace = standings[2].team;
-
-        const grRef = ref(db, 'pl2526/metadata/globalResults');
-        const grSnap = await get(grRef);
-        const existingGR = grSnap.exists() ? grSnap.val() : {};
-
-        await set(grRef, {
-          ...existingGR,
-          champion,
-          secondPlace,
-          thirdPlace,
-        });
-        console.log(`   🏆 Auto-updated Global Results: Champion=${champion}, 2nd=${secondPlace}, 3rd=${thirdPlace}`);
-      }
+      // Auto-update global results top 3 teams (removed to prevent premature leaderboard updates)
     }
   } catch (err) {
     console.error('❌ Standings sync error:', err.message);
@@ -619,32 +627,7 @@ async function main() {
 
       console.log(`   ✅ Saved ${scorers.length} top scorers, ${assists.length} assist leaders, ${cleanSheets.length} GK clean sheets.`);
 
-      // Auto-update global results with leaders
-      const globalResultsUpdates = {};
-      if (scorers.length > 0) {
-        const maxGoals = scorers[0].count;
-        globalResultsUpdates.topScorer = scorers.filter(s => s.count === maxGoals).map(s => s.name).join(', ');
-      }
-      if (assists.length > 0) {
-        const maxAssists = assists[0].count;
-        globalResultsUpdates.topAssist = assists.filter(a => a.count === maxAssists).map(a => a.name).join(', ');
-      }
-      if (cleanSheets.length > 0) {
-        const maxCleanSheets = cleanSheets[0].count;
-        globalResultsUpdates.topGoalkeeper = cleanSheets.filter(c => c.count === maxCleanSheets).map(c => c.name).join(', ');
-      }
-
-      if (Object.keys(globalResultsUpdates).length > 0) {
-        const grRef = ref(db, 'pl2526/metadata/globalResults');
-        const grSnap = await get(grRef);
-        const existingGR = grSnap.exists() ? grSnap.val() : {};
-        
-        await set(grRef, {
-          ...existingGR,
-          ...globalResultsUpdates,
-        });
-        console.log(`   🏆 Auto-updated Global Results scorers/assists/goalkeepers:`, globalResultsUpdates);
-      }
+      // Auto-update global results with leaders (removed to prevent premature leaderboard updates)
     }
   } catch (err) {
     console.error('❌ Top scorers sync error:', err.message);

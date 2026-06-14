@@ -184,12 +184,12 @@ export const removeMatchAndPredictions = async (matchId, dbPrefix = 'wc2026') =>
     if (usersSnap.exists()) {
       const users = usersSnap.val();
       for (const uid in users) {
-        const preds = users[uid]?.matchPredictions || {};
-        const canonicalId = matchId.startsWith('match_') ? matchId : `match_${matchId}`;
+        const preds = users[uid]?.predictions || {};
+        const canonicalId = matchId.startsWith('match_') ? matchId.replace('match_', '') : matchId;
         if (preds[canonicalId]) {
           const updatedPreds = { ...preds };
           delete updatedPreds[canonicalId];
-          await update(ref(database, `${dbPrefix}/users/${uid}`), { matchPredictions: updatedPreds });
+          await update(ref(database, `${dbPrefix}/users/${uid}`), { predictions: updatedPreds });
         }
       }
     }
@@ -360,37 +360,12 @@ export const recalculateAllPoints = async (dbPrefix = 'wc2026') => {
       return 'D';
     };
 
-    // Build prediction distribution per match for rarity bonus
-    const predictionsByMatch = {};
-    for (const userId in users) {
-      const preds = users[userId]?.matchPredictions || {};
-      for (const matchId in preds) {
-        const key = matchId.startsWith('match_') ? matchId : `match_${matchId}`;
-        if (!predictionsByMatch[key]) predictionsByMatch[key] = [];
-        predictionsByMatch[key].push({ userId, result: getResult(preds[matchId].score1, preds[matchId].score2) });
-      }
-    }
 
-    // Precompute rarity per played match
-    const rarityMap = {};
-    for (const key in matches) {
-      const match = matches[key];
-      if (!match || !match.isPlayed) continue;
-      const actualResult = getResult(match.score1, match.score2);
-      const preds = predictionsByMatch[key] || predictionsByMatch[`match_${match.matchNumber}`] || [];
-      const total = preds.length;
-      const correctResultCount = preds.filter(p => p.result === actualResult).length;
-      const isRare = total > 0 ? (correctResultCount / total) < 0.1 : false;
-      rarityMap[key] = { isRare, actualResult };
-      if (match.matchNumber) {
-        rarityMap[match.matchNumber] = rarityMap[key];
-      }
-    }
     
-    // Get tournament stats to check if predictions are correct
-    const statsRef = ref(database, `${dbPrefix}/statistics`);
-    const statsSnapshot = await get(statsRef);
-    const stats = statsSnapshot.val() || {};
+    // Get actual global results from metadata instead of statistics
+    const grRef = ref(database, `${dbPrefix}/metadata/globalResults`);
+    const grSnap = await get(grRef);
+    const actualGlobals = grSnap.val() || {};
 
     // For each user, recalculate their points with rarity bonus, exact-count tiebreaker, and tournament predictions
     for (const userId in users) {
@@ -400,20 +375,16 @@ export const recalculateAllPoints = async (dbPrefix = 'wc2026') => {
       let correctResults = 0;
       
       // Match predictions points
-      if (user.matchPredictions) {
-        for (const matchId in user.matchPredictions) {
-          const prediction = user.matchPredictions[matchId];
+      if (user.predictions) {
+        for (const matchId in user.predictions) {
+          const prediction = user.predictions[matchId];
           const match = matches[matchId] || matches[`match_${matchId}`];
           if (!match || !match.isPlayed) continue;
 
           const actualResult = getResult(match.score1, match.score2);
           const predResult = getResult(prediction.score1, prediction.score2);
-          const rarity = rarityMap[matchId] || rarityMap[`match_${matchId}`] || rarityMap[match.matchNumber];
-          // +1 bonus only if exact score AND rare result (<10%)
-          const rareExactBonus = rarity && rarity.isRare && predResult === actualResult && prediction.score1 === match.score1 && prediction.score2 === match.score2 ? 1 : 0;
-
           if (prediction.score1 === match.score1 && prediction.score2 === match.score2) {
-            totalPoints += 3 + rareExactBonus;
+            totalPoints += 3;
             exactScores += 1;
           } else if (predResult === actualResult) {
             totalPoints += 1;
@@ -422,31 +393,31 @@ export const recalculateAllPoints = async (dbPrefix = 'wc2026') => {
         }
       }
 
-      // Tournament predictions points (5 points each if correct)
-      const globalPreds = user.globalPredictions || {};
+      // Tournament predictions points (5/10 points each if correct, using fuzzy matching)
+      const globalPreds = user.globalPicks || {};
       let tournamentPredictionsCorrect = 0;
       
-      if (globalPreds.champion && stats.champion && globalPreds.champion.toLowerCase() === stats.champion.toLowerCase()) {
+      if (globalPreds.champion && actualGlobals.champion && isGlobalPickMatch(globalPreds.champion, actualGlobals.champion)) {
         totalPoints += 10;
         tournamentPredictionsCorrect += 1;
       }
-      if (globalPreds.second && stats.second && globalPreds.second.toLowerCase() === stats.second.toLowerCase()) {
+      if (globalPreds.secondPlace && actualGlobals.secondPlace && isGlobalPickMatch(globalPreds.secondPlace, actualGlobals.secondPlace)) {
         totalPoints += 5;
         tournamentPredictionsCorrect += 1;
       }
-      if (globalPreds.third && stats.third && globalPreds.third.toLowerCase() === stats.third.toLowerCase()) {
+      if (globalPreds.thirdPlace && actualGlobals.thirdPlace && isGlobalPickMatch(globalPreds.thirdPlace, actualGlobals.thirdPlace)) {
         totalPoints += 5;
         tournamentPredictionsCorrect += 1;
       }
-      if (globalPreds.topScorer && stats.topScorer?.player && globalPreds.topScorer.toLowerCase() === stats.topScorer.player.toLowerCase()) {
+      if (globalPreds.topScorer && actualGlobals.topScorer && isGlobalPickMatch(globalPreds.topScorer, actualGlobals.topScorer)) {
         totalPoints += 5;
         tournamentPredictionsCorrect += 1;
       }
-      if (globalPreds.topAssist && stats.topAssist?.player && globalPreds.topAssist.toLowerCase() === stats.topAssist.player.toLowerCase()) {
+      if (globalPreds.topAssist && actualGlobals.topAssist && isGlobalPickMatch(globalPreds.topAssist, actualGlobals.topAssist)) {
         totalPoints += 5;
         tournamentPredictionsCorrect += 1;
       }
-      if (globalPreds.topGK && stats.goldenGlove?.goalkeeper && globalPreds.topGK.toLowerCase() === stats.goldenGlove.goalkeeper.toLowerCase()) {
+      if (globalPreds.topGoalkeeper && actualGlobals.topGoalkeeper && isGlobalPickMatch(globalPreds.topGoalkeeper, actualGlobals.topGoalkeeper)) {
         totalPoints += 5;
         tournamentPredictionsCorrect += 1;
       }
@@ -463,8 +434,8 @@ export const resetPlayerPredictions = async (userId, dbPrefix = 'wc2026') => {
   try {
     const userRef = ref(database, `${dbPrefix}/users/${userId}`);
     await update(userRef, {
-      globalPredictions: {},
-      matchPredictions: {},
+      globalPicks: {},
+      predictions: {},
       totalPoints: 0
     });
     return { success: true, message: 'Player predictions reset' };

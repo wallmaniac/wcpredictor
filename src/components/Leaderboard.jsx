@@ -141,9 +141,7 @@ export default function Leaderboard() {
   }, [users, currentUser?.uid, selectedLeague, leagues]);
 
   const myLeagues = Object.entries(leagues).filter(([, l]) => l.members?.[currentUser?.uid] || isAdmin).sort((a, b) => (a[1].name || '').localeCompare(b[1].name || ''));
-  const isInSameLeague = (uid) => Object.values(leagues).some(l => l.members?.[currentUser?.uid] && l.members?.[uid]);
   const hasAnyLock = isWC ? Object.keys(myLockedMatches).length > 0 : Object.keys(myLockedDays).length > 0;
-  const canViewPredictions = (uid) => { if (isAdmin) return true; if (uid === currentUser?.uid) return true; if (!hasAnyLock) return false; return isInSameLeague(uid); };
 
   // Auto-default league: if user is in 1 league and no saved preference, select it
   useEffect(() => {
@@ -543,7 +541,6 @@ export default function Leaderboard() {
             </thead>
             <tbody>
               {filtered.map((u, i) => {
-                const canView = canViewPredictions(u.uid);
                 const isSelf = u.uid === currentUser?.uid;
                 const bgColor = i === 0 ? 'rgba(255,215,0,0.08)' : i === 1 ? 'rgba(192,192,192,0.08)' : i === 2 ? 'rgba(205,127,50,0.08)' : 'rgba(255,255,255,0.02)';
                 const borderColor = i < 3 ? `rgba(${i===0?'255,215,0':i===1?'192,192,192':'205,127,50'},0.2)` : 'transparent';
@@ -560,7 +557,6 @@ export default function Leaderboard() {
                     <td style={{ padding: '10px 8px', fontWeight: 'bold', fontSize: '0.88rem' }}>
                       {u.flag} {u.name}
                       {u.hidden && isAdmin && <span style={{ marginLeft: '6px', fontSize: '0.78rem', color: '#ff5555' }} title="Hidden from other users">👻</span>}
-                      {!canView && !isSelf && <span style={{ marginLeft: '6px', fontSize: '0.6rem', color: 'var(--text-muted)' }}>🔒</span>}
                     </td>
                     <td style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem', color: 'var(--primary)' }}>
                       {u.points}
@@ -644,30 +640,30 @@ export default function Leaderboard() {
 
                 {/* Match predictions */}
                 {modalTab === 'matches' && (() => {
-                  const canView = canViewPredictions(viewingUser.uid);
-                  if (!canView) {
-                    return (
-                      <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                        🔒 {t('lockMatchHint') || 'Lock your predictions to view this user\'s match predictions.'}
-                      </div>
-                    );
-                  }
                   if (Object.keys(viewingPreds).length === 0) {
                     return <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>{t('noPredictionsYet')}</div>;
                   }
-                  const visiblePreds = matches
-                    .filter(m => viewingPreds[m.matchNumber])
-                    .filter(m => {
-                      if (isAdmin) return true;
-                      const started = now >= new Date(`${m.date}T${m.utc}:00Z`).getTime();
-                      if (started) return true;
-                      if (viewingUser.uid === currentUser?.uid) return true;
-                      if (isWC) {
-                        return !!viewingUserLocks[m.matchNumber] && !!myLockedMatches[m.matchNumber];
-                      }
-                      const fmt = formatPLMatchTime(m.date, m.utc, userTZ, locale);
-                      return !!viewingUserLocks[fmt.dateKey] && !!myLockedDays[fmt.dateKey];
-                    });
+                  const predictedMatches = matches.filter(m => viewingPreds[m.matchNumber]);
+                  const visiblePreds = predictedMatches.filter(m => {
+                    if (isAdmin) return true;
+                    if (viewingUser.uid === currentUser?.uid) return true;
+
+                    // Finished matches are always visible
+                    const isFinished = matchResults[`match_${m.matchNumber}`]?.status === 'finished';
+                    if (isFinished) return true;
+
+                    // Started matches are always visible
+                    const started = now >= new Date(`${m.date}T${m.utc}:00Z`).getTime();
+                    if (started) return true;
+
+                    // Unfinished matches require locks from both players
+                    if (isWC) {
+                      return !!viewingUserLocks[m.matchNumber] && !!myLockedMatches[m.matchNumber];
+                    }
+                    const fmt = formatPLMatchTime(m.date, m.utc, userTZ, locale);
+                    return !!viewingUserLocks[fmt.dateKey] && !!myLockedDays[fmt.dateKey];
+                  });
+
                   if (visiblePreds.length === 0) {
                     return (
                       <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
@@ -682,7 +678,23 @@ export default function Leaderboard() {
                     if (dateTimeA !== dateTimeB) return dateTimeB.localeCompare(dateTimeA);
                     return b.matchNumber - a.matchNumber;
                   });
-                  return sortedVisiblePreds.map(m => renderPredRow(m));
+
+                  const hiddenCount = predictedMatches.length - visiblePreds.length;
+
+                  return (
+                    <>
+                      {hiddenCount > 0 && (
+                        <div style={{
+                          padding: '8px 12px', borderRadius: '6px', fontSize: '0.78rem', textAlign: 'center',
+                          background: 'rgba(255,184,0,0.03)', border: '1px solid rgba(255,184,0,0.12)',
+                          color: '#FFB800', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
+                        }}>
+                          🔒 {lang === 'hr' ? `Neka buduća predviđanja (${hiddenCount}) su skrivena jer nisu zaključana.` : `${hiddenCount} future prediction(s) are hidden because they are not locked.`}
+                        </div>
+                      )}
+                      {sortedVisiblePreds.map(m => renderPredRow(m))}
+                    </>
+                  );
                 })()}
               </div>
             )}

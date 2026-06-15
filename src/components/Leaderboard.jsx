@@ -266,13 +266,12 @@ export default function Leaderboard() {
   }, [allUserPreds, finishedMatches, matchResults, users]);
 
   const liveOrNextMatchesData = useMemo(() => {
-    // 1. Find all live matches
+    // 1. Find all live matches (kickoff has passed, and started less than 130 minutes ago)
     const live = matches.filter(m => {
       const actual = matchResults[`match_${m.matchNumber}`];
       const kickoff = new Date(`${m.date}T${m.utc}:00Z`).getTime();
       const started = now >= kickoff;
-      const isFinished = actual?.status === 'finished';
-      return actual?.status === 'live' || (started && !isFinished && (now - kickoff < 4 * 60 * 60 * 1000));
+      return actual?.status === 'live' || (started && (now - kickoff < 130 * 60 * 1000));
     });
 
     if (live.length > 0) {
@@ -516,10 +515,28 @@ export default function Leaderboard() {
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '16px' }}>
-        <button onClick={() => setActiveTab('standings')} className={activeTab === 'standings' ? 'phase-tab active' : 'phase-tab'}>📊 {t('standings')}</button>
-        <button onClick={() => setActiveTab('analytics')} className={activeTab === 'analytics' ? 'phase-tab active' : 'phase-tab'}>🎯 {t('analytics')}</button>
-        <button onClick={() => setActiveTab('live_predictions')} className={activeTab === 'live_predictions' ? 'phase-tab active' : 'phase-tab'}>🔴 {t('livePredictions')}</button>
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '16px', width: '100%' }}>
+        <button 
+          onClick={() => setActiveTab('standings')} 
+          className={activeTab === 'standings' ? 'phase-tab active' : 'phase-tab'}
+          style={{ flex: 1, minWidth: 0, whiteSpace: 'normal', padding: '6px 4px', fontSize: '0.75rem', textAlign: 'center', lineHeight: '1.2' }}
+        >
+          📊 {t('standings')}
+        </button>
+        <button 
+          onClick={() => setActiveTab('analytics')} 
+          className={activeTab === 'analytics' ? 'phase-tab active' : 'phase-tab'}
+          style={{ flex: 1, minWidth: 0, whiteSpace: 'normal', padding: '6px 4px', fontSize: '0.75rem', textAlign: 'center', lineHeight: '1.2' }}
+        >
+          🎯 {t('analytics')}
+        </button>
+        <button 
+          onClick={() => setActiveTab('live_predictions')} 
+          className={activeTab === 'live_predictions' ? 'phase-tab active' : 'phase-tab'}
+          style={{ flex: 1, minWidth: 0, whiteSpace: 'normal', padding: '6px 4px', fontSize: '0.75rem', textAlign: 'center', lineHeight: '1.2' }}
+        >
+          🔴 {t('livePredictions')}
+        </button>
       </div>
 
       {activeTab === 'standings' && (<>

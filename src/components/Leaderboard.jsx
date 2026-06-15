@@ -230,7 +230,7 @@ export default function Leaderboard() {
 
   // Load analytics data
   useEffect(() => {
-    if (activeTab === 'analytics') {
+    if (activeTab === 'analytics' || activeTab === 'live_predictions') {
       const fetchAnalytics = async () => {
         const snap = await get(ref(database, `${fbPath}/users`));
         if (snap.exists()) {
@@ -264,6 +264,48 @@ export default function Leaderboard() {
       return exactUsers.length > 0 ? { match: m, actual, exactUsers } : null;
     }).filter(Boolean);
   }, [allUserPreds, finishedMatches, matchResults, users]);
+
+  const liveOrNextMatchesData = useMemo(() => {
+    // 1. Find all live matches
+    const live = matches.filter(m => {
+      const actual = matchResults[`match_${m.matchNumber}`];
+      const kickoff = new Date(`${m.date}T${m.utc}:00Z`).getTime();
+      const started = now >= kickoff;
+      const isFinished = actual?.status === 'finished';
+      return actual?.status === 'live' || (started && !isFinished && (now - kickoff < 4 * 60 * 60 * 1000));
+    });
+
+    if (live.length > 0) {
+      return { type: 'live', matches: live };
+    }
+
+    // 2. If no live matches, find next match(es) to be played
+    const upcoming = matches.filter(m => {
+      const actual = matchResults[`match_${m.matchNumber}`];
+      const isFinished = actual?.status === 'finished';
+      const kickoff = new Date(`${m.date}T${m.utc}:00Z`).getTime();
+      return !isFinished && kickoff > now;
+    });
+
+    if (upcoming.length === 0) {
+      return { type: 'none', matches: [] };
+    }
+
+    // Sort upcoming ascending by kickoff time
+    upcoming.sort((a, b) => {
+      const kickoffA = new Date(`${a.date}T${a.utc}:00Z`).getTime();
+      const kickoffB = new Date(`${b.date}T${b.utc}:00Z`).getTime();
+      return kickoffA - kickoffB;
+    });
+
+    const nextKickoff = new Date(`${upcoming[0].date}T${upcoming[0].utc}:00Z`).getTime();
+    const next = upcoming.filter(m => {
+      const kickoff = new Date(`${m.date}T${m.utc}:00Z`).getTime();
+      return kickoff === nextKickoff;
+    });
+
+    return { type: 'next', matches: next };
+  }, [matches, matchResults, now]);
 
   // Global pick label helper
   const globalPickLabel = (key) => {
@@ -477,6 +519,7 @@ export default function Leaderboard() {
       <div style={{ display: 'flex', gap: '6px', marginBottom: '16px' }}>
         <button onClick={() => setActiveTab('standings')} className={activeTab === 'standings' ? 'phase-tab active' : 'phase-tab'}>📊 {t('standings')}</button>
         <button onClick={() => setActiveTab('analytics')} className={activeTab === 'analytics' ? 'phase-tab active' : 'phase-tab'}>🎯 {t('analytics')}</button>
+        <button onClick={() => setActiveTab('live_predictions')} className={activeTab === 'live_predictions' ? 'phase-tab active' : 'phase-tab'}>🔴 {t('livePredictions')}</button>
       </div>
 
       {activeTab === 'standings' && (<>
@@ -606,6 +649,146 @@ export default function Leaderboard() {
           )}
         </div>
       )}
+
+      {/* Live Predictions Tab */}
+      {activeTab === 'live_predictions' && (() => {
+        const { type, matches: featuredMatches } = liveOrNextMatchesData;
+
+        if (type === 'none' || featuredMatches.length === 0) {
+          return (
+            <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+              {lang === 'hr' ? 'Nema utakmica koje su uživo ili sljedeće na rasporedu.' : 'No live or upcoming matches featured.'}
+            </div>
+          );
+        }
+
+        if (Object.keys(allUserPreds).length === 0) {
+          return (
+            <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+              ⏳ {t('loading') || 'Loading...'}
+            </div>
+          );
+        }
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {featuredMatches.map(m => {
+              const actual = matchResults[`match_${m.matchNumber}`];
+              const isLive = type === 'live';
+              const fmt = fmtTime(m.date, m.utc, userTZ, locale);
+
+              return (
+                <div key={m.matchNumber} className="glass-card" style={{ padding: '16px', border: isLive ? '1px solid rgba(255,184,0,0.3)' : '1px solid var(--glass-border)' }}>
+                  {/* Match Header */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+                    <div>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>#{m.matchNumber} • {fmt.fullDate}</span>
+                      <h4 style={{ margin: '4px 0 0 0', fontSize: '1.1rem', fontWeight: 700, color: 'var(--primary)' }}>
+                        {isWC ? tt(m.team1) : m.team1} vs {isWC ? tt(m.team2) : m.team2}
+                      </h4>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      {isLive ? (
+                        <>
+                          <span style={{ background: 'rgba(255,50,50,0.15)', color: '#ff5555', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold', border: '1px solid rgba(255,50,50,0.3)' }}>
+                            🔴 LIVE {actual?.liveMinute ? `(${actual.liveMinute})` : ''}
+                          </span>
+                          <span style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#FFB800' }}>
+                            {actual?.score1 ?? 0} - {actual?.score2 ?? 0}
+                          </span>
+                        </>
+                      ) : (
+                        <span style={{ background: 'rgba(0,180,255,0.15)', color: '#00B4FF', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold', border: '1px solid rgba(0,180,255,0.3)' }}>
+                          ⏳ {lang === 'hr' ? 'SLJEDEĆA' : 'UPCOMING'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Predictions List */}
+                  <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                    <table style={{ width: '100%', minWidth: '100%', borderCollapse: 'separate', borderSpacing: '0 4px', fontSize: '0.82rem' }}>
+                      <thead>
+                        <tr style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                          <th style={{ textAlign: 'left', padding: '6px 8px' }}>{t('player')}</th>
+                          <th style={{ textAlign: 'center', padding: '6px 8px' }}>{t('prediction') || 'Prediction'}</th>
+                          {isLive && <th style={{ textAlign: 'center', padding: '6px 8px' }}>{lang === 'hr' ? 'Live bodovi' : 'Live points'}</th>}
+                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>{lang === 'hr' ? 'Status' : 'Status'}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.map(u => {
+                          const isSelf = u.uid === currentUser?.uid;
+                          const pred = allUserPreds[u.uid]?.predictions?.[m.matchNumber];
+                          const targetLocks = allUserPreds[u.uid]?.[isWC ? 'lockedMatches' : 'lockedDays'] || {};
+                          const isTargetLocked = isWC ? !!targetLocks[m.matchNumber] : !!targetLocks[fmt.dateKey];
+                          const myLocks = isWC ? myLockedMatches : myLockedDays;
+                          const isMyLocked = isWC ? !!myLocks[m.matchNumber] : !!myLocks[fmt.dateKey];
+
+                          const canSee = isAdmin || isSelf || isLive || (isTargetLocked && isMyLocked);
+                          const hasPredicted = pred !== undefined && pred !== null;
+
+                          let predText = '—';
+                          let statusText = lang === 'hr' ? 'Nije zaključano' : 'Not locked';
+                          let statusColor = 'var(--text-muted)';
+                          let livePts = 0;
+
+                          if (isTargetLocked || isLive) {
+                            statusText = lang === 'hr' ? 'Zaključano' : 'Locked';
+                            statusColor = '#00ff88';
+                          }
+
+                          if (!hasPredicted) {
+                            predText = lang === 'hr' ? 'Bez prognoze' : 'No prediction';
+                            statusText = lang === 'hr' ? 'Nije prognozirano' : 'Not predicted';
+                            statusColor = 'rgba(255,50,50,0.5)';
+                          } else if (canSee) {
+                            predText = `${pred.score1} - ${pred.score2}`;
+                            if (isLive && actual) {
+                              livePts = calcPts(pred, actual);
+                            }
+                          } else {
+                            predText = '🔒';
+                            if (!isMyLocked) {
+                              statusText = lang === 'hr' ? 'Zaključajte za prikaz' : 'Lock yours to view';
+                              statusColor = '#FFB800';
+                            }
+                          }
+
+                          return (
+                            <tr key={u.uid} style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                              <td style={{ padding: '8px', fontWeight: 600 }}>
+                                {u.flag} {u.name} {isSelf && <span style={{ color: 'var(--primary)', fontSize: '0.7rem' }}>({lang === 'hr' ? 'Vi' : 'You'})</span>}
+                              </td>
+                              <td style={{ padding: '8px', textAlign: 'center', fontWeight: 'bold', fontSize: '0.9rem', color: canSee && hasPredicted ? 'var(--primary)' : 'var(--text-muted)' }}>
+                                {predText}
+                              </td>
+                              {isLive && (
+                                <td style={{ padding: '8px', textAlign: 'center', fontWeight: 'bold' }}>
+                                  {hasPredicted && canSee && livePts > 0 ? (
+                                    <span style={{ color: livePts === 3 ? '#00ff88' : '#FFB800', background: livePts === 3 ? 'rgba(0,255,136,0.1)' : 'rgba(255,184,0,0.08)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem' }}>
+                                      +{livePts} {t('pts')}
+                                    </span>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-muted)' }}>0 {t('pts')}</span>
+                                  )}
+                                </td>
+                              )}
+                              <td style={{ padding: '8px', textAlign: 'right', color: statusColor, fontSize: '0.75rem', fontWeight: 600 }}>
+                                {statusText}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* View predictions modal */}
       {viewingUser && createPortal(

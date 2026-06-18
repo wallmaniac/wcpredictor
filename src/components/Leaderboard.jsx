@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { database } from '../config/firebase';
-import { ref, onValue, get, set } from 'firebase/database';
+import { ref, onValue, get, set, remove } from 'firebase/database';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useCompetition } from '../context/CompetitionContext';
@@ -209,8 +209,26 @@ export default function Leaderboard() {
   };
 
   const handleAdminEditPred = async (uid, mn, s1, s2) => {
-    if (!isAdmin || s1 === '' || s2 === '') return;
+    if (!isAdmin) return;
+
+    // If either score is empty string or null/undefined, delete the prediction
+    if (s1 === '' || s2 === '' || s1 === null || s2 === null || s1 === undefined || s2 === undefined) {
+      try {
+        await remove(ref(database, `${fbPath}/users/${uid}/predictions/${mn}`));
+        await recalculateAllPoints(competition.id);
+        setViewingPreds(p => {
+          const updated = { ...p };
+          delete updated[mn];
+          return updated;
+        });
+      } catch (err) {
+        console.error(err);
+      }
+      return;
+    }
+
     await saveAdminPredictionLeaderboardExternal(database, fbPath, uid, mn, s1, s2);
+    await recalculateAllPoints(competition.id);
     setViewingPreds(p => ({ ...p, [mn]: { score1: parseInt(s1, 10), score2: parseInt(s2, 10) } }));
   };
 
@@ -370,14 +388,27 @@ export default function Leaderboard() {
           {isAdmin ? (
             <>
               <input type="number" min="0" defaultValue={pred?.score1 ?? ''} className="input-glass score-input"
+                key={`s1_${m.matchNumber}_${pred?.score1 ?? ''}`}
                 style={{ width: '40px', padding: '4px', textAlign: 'center', fontSize: '0.85rem' }}
                 onBlur={e => handleAdminEditPred(viewingUser.uid, m.matchNumber, e.target.value, document.getElementById(`adm_${viewingUser.uid}_${m.matchNumber}_s2`)?.value)}
                 id={`adm_${viewingUser.uid}_${m.matchNumber}_s1`} />
               <span style={{ color: 'var(--text-muted)' }}>-</span>
               <input type="number" min="0" defaultValue={pred?.score2 ?? ''} className="input-glass score-input"
+                key={`s2_${m.matchNumber}_${pred?.score2 ?? ''}`}
                 style={{ width: '40px', padding: '4px', textAlign: 'center', fontSize: '0.85rem' }}
                 onBlur={e => handleAdminEditPred(viewingUser.uid, m.matchNumber, document.getElementById(`adm_${viewingUser.uid}_${m.matchNumber}_s1`)?.value, e.target.value)}
                 id={`adm_${viewingUser.uid}_${m.matchNumber}_s2`} />
+              {pred && (pred.score1 !== undefined && pred.score2 !== undefined && pred.score1 !== '' && pred.score2 !== '') && (
+                <button onClick={async () => {
+                  const confirmMsg = lang === 'hr' ? `⚠️ Izbrisati predviđanje za utakmicu #${m.matchNumber}?` : `⚠️ Delete prediction for match #${m.matchNumber}?`;
+                  if (window.confirm(confirmMsg)) {
+                    await handleAdminEditPred(viewingUser.uid, m.matchNumber, '', '');
+                  }
+                }} style={{
+                  background: 'transparent', border: 'none', color: '#ff5555', cursor: 'pointer',
+                  fontSize: '0.9rem', padding: '0 4px', display: 'flex', alignItems: 'center'
+                }} title={t('delete') || 'Delete'}>🗑️</button>
+              )}
             </>
           ) : (
             <span style={{

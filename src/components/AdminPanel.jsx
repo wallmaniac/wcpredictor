@@ -1797,6 +1797,17 @@ export default function AdminPanel() {
                                     onBlur={e => handleAdminEditPred(m.matchNumber, pred?.score1 ?? '', e.target.value)}
                                     id={`adm2_${selectedUser.uid}_${m.matchNumber}_s2`}
                                     key={`s2_${selectedUser.uid}_${userViewComp}_${m.matchNumber}`} />
+                                  {pred && (pred.score1 !== undefined && pred.score2 !== undefined && pred.score1 !== '' && pred.score2 !== '') && (
+                                    <button onClick={async () => {
+                                      const confirmMsg = lang === 'hr' ? `⚠️ Izbrisati predviđanje za utakmicu #${m.matchNumber}?` : `⚠️ Delete prediction for match #${m.matchNumber}?`;
+                                      if (window.confirm(confirmMsg)) {
+                                        await handleAdminEditPred(m.matchNumber, '', '');
+                                      }
+                                    }} style={{
+                                      background: 'transparent', border: 'none', color: '#ff5555', cursor: 'pointer',
+                                      fontSize: '0.9rem', padding: '0 4px', display: 'flex', alignItems: 'center'
+                                    }} title={t('delete') || 'Delete'}>🗑️</button>
+                                  )}
                                 </div>
 
                                 {/* Lock/Unlock toggle for each match */}

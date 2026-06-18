@@ -152,12 +152,27 @@ export default function MatchList() {
   const fmtTime = isWC ? formatMatchTime : formatPLMatchTime;
 
   const handlePredict = async (matchNumber, score1, score2) => {
-    if (score1 === '' || score2 === '') return;
     const match = matches.find(m => m.matchNumber === matchNumber);
     if (!match) return;
     if (!isAdmin && hasMatchStarted(match)) return;
     if (isWC) { if (!isAdmin && lockedMatches[matchNumber]) return; }
     else { const fmt = fmtTime(match.date, match.utc, userTZ, locale); if (!isAdmin && lockedDays[fmt.dateKey]) return; }
+
+    // If either score is empty string or null/undefined, delete the prediction
+    if (score1 === '' || score2 === '' || score1 === null || score2 === null || score1 === undefined || score2 === undefined) {
+      if (predictions[matchNumber]) {
+        setSaving(p => ({ ...p, [matchNumber]: true }));
+        try {
+          await set(ref(database, `${fbPath}/users/${currentUser.uid}/predictions/${matchNumber}`), null);
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setSaving(p => ({ ...p, [matchNumber]: false }));
+        }
+      }
+      return;
+    }
+
     setSaving(p => ({ ...p, [matchNumber]: true }));
     try { await saveUserPredictionExternal(database, fbPath, currentUser.uid, matchNumber, score1, score2); }
     catch (e) { console.error(e); }
@@ -260,11 +275,13 @@ export default function MatchList() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <div className="prediction-inputs">
                   <input type="number" className="input-glass score-input" min="0" defaultValue={pred?.score1 ?? ''} disabled={!editable}
+                    key={`s1_${match.matchNumber}_${pred?.score1 ?? ''}`}
                     style={!editable ? { opacity: 0.6, cursor: 'not-allowed' } : {}}
                     onBlur={e => handlePredict(match.matchNumber, e.target.value, document.getElementById(`m${competition.id}_${match.matchNumber}_s2`).value)}
                     id={`m${competition.id}_${match.matchNumber}_s1`} />
                   <span className="score-dash">-</span>
                   <input type="number" className="input-glass score-input" min="0" defaultValue={pred?.score2 ?? ''} disabled={!editable}
+                    key={`s2_${match.matchNumber}_${pred?.score2 ?? ''}`}
                     style={!editable ? { opacity: 0.6, cursor: 'not-allowed' } : {}}
                     onBlur={e => handlePredict(match.matchNumber, document.getElementById(`m${competition.id}_${match.matchNumber}_s1`).value, e.target.value)}
                     id={`m${competition.id}_${match.matchNumber}_s2`} />

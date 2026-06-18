@@ -630,9 +630,27 @@ export default function AdminPanel() {
   };
 
   const handleAdminEditPred = async (matchNum, s1, s2) => {
-    if (!selectedUser || s1 === '' || s2 === '') return;
+    if (!selectedUser) return;
     const compId = userViewComp;
     const path = compId === 'wc2026' ? 'wc2026' : 'pl2526';
+    
+    // If either score is empty string or null/undefined, delete the prediction
+    if (s1 === '' || s2 === '' || s1 === null || s2 === null || s1 === undefined || s2 === undefined) {
+      setUserPreds(p => {
+        const updated = { ...p };
+        delete updated[matchNum];
+        return updated;
+      });
+      try {
+        await remove(ref(database, `${path}/users/${selectedUser.uid}/predictions/${matchNum}`));
+        await recalculateAllPoints(compId);
+      } catch (err) {
+        console.error(err);
+        showMsg(`❌ Error: ${err.message}`);
+        await loadUserPreds(selectedUser.uid, path);
+      }
+      return;
+    }
     
     // Optimistically update local state synchronously first
     setUserPreds(p => ({

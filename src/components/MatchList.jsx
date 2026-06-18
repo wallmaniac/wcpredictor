@@ -375,7 +375,7 @@ export default function MatchList() {
       )}
 
       {/* Played matches collapsible */}
-      {playedMatches.length > 0 && !searchQuery && (
+      {playedMatches.length > 0 && (
         <div style={{ marginBottom: '12px' }}>
           <button onClick={() => setShowPlayed(!showPlayed)} style={{
             width: '100%', padding: '10px 16px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--glass-border)',

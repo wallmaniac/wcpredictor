@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { database } from '../config/firebase';
 import { ref, onValue } from 'firebase/database';
-import { GROUP_TEAMS, ALL_MATCHES } from '../utils/matchData';
+import { GROUP_TEAMS, ALL_MATCHES, sortGroupStageStandings } from '../utils/matchData';
 import { useLanguage } from '../context/LanguageContext';
 
 export default function GroupTables() {
@@ -57,12 +57,8 @@ export default function GroupTables() {
 
     standings.forEach(t => t.gd = t.gf - t.ga);
     
-    // Sort by PTS, then GD, then GF
-    return standings.sort((a, b) => {
-      if (b.pts !== a.pts) return b.pts - a.pts;
-      if (b.gd !== a.gd) return b.gd - a.gd;
-      return b.gf - a.gf;
-    });
+    // Sort using H2H tiebreakers
+    return sortGroupStageStandings(standings, groupMatches, liveMatches);
   };
 
   const getThirdPlaceStandings = () => {

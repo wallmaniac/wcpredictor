@@ -1105,15 +1105,16 @@ export function resolveKnockoutMatches(rawMatches, liveMatches) {
     }
   });
 
-  // Sort standings for each group
+  // Sort standings for each group using H2H tiebreakers
   const resolvedGroups = {};
+  const groupStageMatches = rawMatches.filter(m => m.stage === 'Group Stage');
   Object.keys(groupStandings).forEach(groupName => {
     groupStandings[groupName].forEach(t => t.gd = t.gf - t.ga);
-    resolvedGroups[groupName] = [...groupStandings[groupName]].sort((a, b) => {
-      if (b.pts !== a.pts) return b.pts - a.pts;
-      if (b.gd !== a.gd) return b.gd - a.gd;
-      return b.gf - a.gf;
-    });
+    resolvedGroups[groupName] = sortGroupStageStandings(
+      groupStandings[groupName],
+      groupStageMatches.filter(m => m.group === groupName),
+      liveMatches
+    );
   });
 
   // Calculate 3rd place standings
@@ -1250,4 +1251,80 @@ export function resolveKnockoutMatches(rawMatches, liveMatches) {
   });
 
   return resolvedMatches.sort((a, b) => a.matchNumber - b.matchNumber);
+}
+
+export function sortGroupStageStandings(teams, groupMatches, liveMatches) {
+  // Sort by overall points first
+  const sortedByPoints = [...teams].sort((a, b) => b.pts - a.pts);
+  
+  const groups = [];
+  let currentGroup = [sortedByPoints[0]];
+  for (let i = 1; i < sortedByPoints.length; i++) {
+    if (sortedByPoints[i].pts === currentGroup[0].pts) {
+      currentGroup.push(sortedByPoints[i]);
+    } else {
+      groups.push(currentGroup);
+      currentGroup = [sortedByPoints[i]];
+    }
+  }
+  groups.push(currentGroup);
+  
+  const finalSorted = [];
+  groups.forEach(subteams => {
+    if (subteams.length === 1) {
+      finalSorted.push(subteams[0]);
+    } else {
+      const h2hStats = {};
+      subteams.forEach(t => {
+        h2hStats[t.name] = { pts: 0, gd: 0, gf: 0, ga: 0 };
+      });
+      
+      const subteamNames = subteams.map(t => t.name);
+      
+      groupMatches.forEach(match => {
+        if (subteamNames.includes(match.team1) && subteamNames.includes(match.team2)) {
+          const dbMatch = liveMatches[`match_${match.matchNumber}`];
+          if (dbMatch && dbMatch.status === 'finished') {
+            const s1 = parseInt(dbMatch.score1, 10);
+            const s2 = parseInt(dbMatch.score2, 10);
+            if (!isNaN(s1) && !isNaN(s2)) {
+              h2hStats[match.team1].gf += s1;
+              h2hStats[match.team1].ga += s2;
+              h2hStats[match.team2].gf += s2;
+              h2hStats[match.team2].ga += s1;
+              
+              if (s1 > s2) {
+                h2hStats[match.team1].pts += 3;
+              } else if (s1 < s2) {
+                h2hStats[match.team2].pts += 3;
+              } else {
+                h2hStats[match.team1].pts += 1;
+                h2hStats[match.team2].pts += 1;
+              }
+            }
+          }
+        }
+      });
+      
+      subteams.forEach(t => {
+        h2hStats[t.name].gd = h2hStats[t.name].gf - h2hStats[t.name].ga;
+      });
+      
+      const sortedSubteams = [...subteams].sort((a, b) => {
+        const statsA = h2hStats[a.name];
+        const statsB = h2hStats[b.name];
+        
+        if (statsB.pts !== statsA.pts) return statsB.pts - statsA.pts;
+        if (statsB.gd !== statsA.gd) return statsB.gd - statsA.gd;
+        if (statsB.gf !== statsA.gf) return statsB.gf - statsA.gf;
+        if (b.gd !== a.gd) return b.gd - a.gd;
+        if (b.gf !== a.gf) return b.gf - a.gf;
+        return a.name.localeCompare(b.name);
+      });
+      
+      finalSorted.push(...sortedSubteams);
+    }
+  });
+  
+  return finalSorted;
 }

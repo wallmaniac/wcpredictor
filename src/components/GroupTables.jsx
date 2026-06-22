@@ -5,7 +5,7 @@ import { GROUP_TEAMS, ALL_MATCHES } from '../utils/matchData';
 import { useLanguage } from '../context/LanguageContext';
 
 export default function GroupTables() {
-  const { t, tt } = useLanguage();
+  const { t, tt, lang } = useLanguage();
   const [liveMatches, setLiveMatches] = useState({});
 
   useEffect(() => {
@@ -65,6 +65,22 @@ export default function GroupTables() {
     });
   };
 
+  const getThirdPlaceStandings = () => {
+    const thirds = [];
+    Object.keys(GROUP_TEAMS).forEach(groupName => {
+      const standings = getStandings(groupName);
+      if (standings && standings[2]) {
+        thirds.push({ ...standings[2], group: groupName });
+      }
+    });
+    // Sort by PTS, then GD, then GF
+    return thirds.sort((a, b) => {
+      if (b.pts !== a.pts) return b.pts - a.pts;
+      if (b.gd !== a.gd) return b.gd - a.gd;
+      return b.gf - a.gf;
+    });
+  };
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
       {Object.keys(GROUP_TEAMS).map(groupName => {
@@ -98,6 +114,61 @@ export default function GroupTables() {
           </div>
         );
       })}
+
+      {/* Third-Place Standings Virtual Table */}
+      <div className="glass-card" style={{ gridColumn: '1 / -1', padding: '20px', marginTop: '10px' }}>
+        <h3 style={{ marginBottom: '12px', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          📊 {lang === 'hr' ? 'Poredak trećeplasiranih reprezentacija' : 'Third-Placed Teams Standings'}
+        </h3>
+        <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '15px', lineHeight: '1.4' }}>
+          {lang === 'hr' 
+            ? 'Najboljih 8 reprezentacija prolazi u osminu finala (šesnaestinu finala). Kriteriji izjednačenja: Bodovi ➔ Gol-razlika ➔ Postignuti golovi.' 
+            : 'The top 8 teams advance to the Round of 32. Tiebreakers: Points ➔ Goal Difference ➔ Goals Scored.'}
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
+            <thead>
+              <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--glass-border)' }}>
+                <th style={{ padding: '10px 8px' }}>{lang === 'hr' ? 'Poz.' : 'Pos.'}</th>
+                <th style={{ padding: '10px 8px' }}>{t('team')}</th>
+                <th style={{ padding: '10px 8px' }}>{lang === 'hr' ? 'Grupa' : 'Group'}</th>
+                <th style={{ padding: '10px 8px' }}>{t('played')}</th>
+                <th style={{ padding: '10px 8px' }}>{t('goalDiff')}</th>
+                <th style={{ padding: '10px 8px' }}>{lang === 'hr' ? 'Post. gol.' : 'Goals Scored'}</th>
+                <th style={{ padding: '10px 8px' }}>{t('points')}</th>
+                <th style={{ padding: '10px 8px' }}>{lang === 'hr' ? 'Status' : 'Status'}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {getThirdPlaceStandings().map((row, idx) => {
+                const advances = idx < 8;
+                const rowBg = advances ? 'rgba(0, 255, 136, 0.02)' : 'rgba(255, 85, 85, 0.01)';
+                const statusColor = advances ? 'var(--primary)' : '#ff5555';
+                const statusText = advances 
+                  ? (lang === 'hr' ? 'Kvalificiran' : 'Qualified') 
+                  : (lang === 'hr' ? 'Eliminiran' : 'Eliminated');
+                
+                return (
+                  <tr key={row.name} style={{ 
+                    borderBottom: '1px solid rgba(255,255,255,0.05)', 
+                    background: rowBg,
+                    transition: 'background 0.2s'
+                  }}>
+                    <td style={{ padding: '10px 8px', fontWeight: 'bold' }}>{idx + 1}</td>
+                    <td style={{ padding: '10px 8px', fontWeight: 'bold' }}>{tt(row.name)}</td>
+                    <td style={{ padding: '10px 8px', textAlign: 'center' }}>{row.group}</td>
+                    <td style={{ padding: '10px 8px' }}>{row.played}</td>
+                    <td style={{ padding: '10px 8px' }}>{row.gd > 0 ? `+${row.gd}` : row.gd}</td>
+                    <td style={{ padding: '10px 8px' }}>{row.gf}</td>
+                    <td style={{ padding: '10px 8px', fontWeight: 'bold' }}>{row.pts}</td>
+                    <td style={{ padding: '10px 8px', fontWeight: 600, color: statusColor }}>{statusText}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

@@ -93,6 +93,7 @@ export default function AdminPanel() {
   const [editHidden, setEditHidden] = useState(false);
   const [loadingUser, setLoadingUser] = useState(false);
   const [userViewComp, setUserViewComp] = useState('wc2026');
+  const [userSearchQuery, setUserSearchQuery] = useState('');
   const [predFilter, setPredFilter] = useState('predicted');
   const [predSearch, setPredSearch] = useState('');
   const [predLimit, setPredLimit] = useState(50);
@@ -634,8 +635,11 @@ export default function AdminPanel() {
     const compId = userViewComp;
     const path = compId === 'wc2026' ? 'wc2026' : 'pl2526';
     
-    // If either score is empty string or null/undefined, delete the prediction
-    if (s1 === '' || s2 === '' || s1 === null || s2 === null || s1 === undefined || s2 === undefined) {
+    const s1Empty = s1 === '' || s1 === null || s1 === undefined;
+    const s2Empty = s2 === '' || s2 === null || s2 === undefined;
+
+    // If both scores are empty, delete the prediction
+    if (s1Empty && s2Empty) {
       setUserPreds(p => {
         const updated = { ...p };
         delete updated[matchNum];
@@ -649,6 +653,19 @@ export default function AdminPanel() {
         showMsg(`❌ Error: ${err.message}`);
         await loadUserPreds(selectedUser.uid, path);
       }
+      return;
+    }
+    
+    // If only one score is empty, do not save to DB yet, but keep the partial local state
+    if (s1Empty || s2Empty) {
+      setUserPreds(p => ({
+        ...p,
+        [matchNum]: {
+          ...(p[matchNum] || {}),
+          score1: s1Empty ? '' : parseInt(s1, 10),
+          score2: s2Empty ? '' : parseInt(s2, 10),
+        }
+      }));
       return;
     }
     
@@ -983,6 +1000,16 @@ export default function AdminPanel() {
 
           <div className="glass-card" style={cs}>
             <h3 style={{ color: 'var(--primary)', marginBottom: '12px', fontSize: '0.95rem' }}>👥 {t('userManagement')}</h3>
+            <div style={{ marginBottom: '12px' }}>
+              <input
+                type="text"
+                className="input-glass"
+                placeholder={lang === 'hr' ? '🔍 Traži korisnika po imenu ili e-mailu...' : '🔍 Search user by name or email...'}
+                value={userSearchQuery}
+                onChange={e => setUserSearchQuery(e.target.value)}
+                style={{ width: '100%', padding: '8px 12px', fontSize: '0.82rem' }}
+              />
+            </div>
             {/* Desktop table */}
             <div className="admin-user-table" style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
@@ -993,7 +1020,15 @@ export default function AdminPanel() {
                   {isAdmin && <th style={{ textAlign: 'right', padding: '8px 4px' }}>{t('actions')}</th>}
                 </tr></thead>
                 <tbody>
-                  {Object.entries(users).sort((a,b) => (b[1].totalPoints||0) - (a[1].totalPoints||0)).map(([uid, user]) => {
+                  {Object.entries(users)
+                    .filter(([uid, user]) => {
+                      if (!userSearchQuery.trim()) return true;
+                      const q = removeDiacritics(userSearchQuery);
+                      const name = removeDiacritics(user.displayName || '');
+                      const email = removeDiacritics(user.email || '');
+                      return name.includes(q) || email.includes(q);
+                    })
+                    .sort((a,b) => (b[1].totalPoints||0) - (a[1].totalPoints||0)).map(([uid, user]) => {
                     const isSuper = user.role === 'superadmin' || user.email === 'admin@wc2026.com';
                     const isAdm = user.role === 'admin';
                     const lockCount = allUserLocks[uid] ? Object.keys(allUserLocks[uid]).length : 0;
@@ -1091,7 +1126,15 @@ export default function AdminPanel() {
               </div>
               {/* Mobile cards */}
               <div className="admin-user-cards">
-                {Object.entries(users).sort((a,b) => (b[1].totalPoints||0) - (a[1].totalPoints||0)).map(([uid, user]) => {
+                {Object.entries(users)
+                  .filter(([uid, user]) => {
+                    if (!userSearchQuery.trim()) return true;
+                    const q = removeDiacritics(userSearchQuery);
+                    const name = removeDiacritics(user.displayName || '');
+                    const email = removeDiacritics(user.email || '');
+                    return name.includes(q) || email.includes(q);
+                  })
+                  .sort((a,b) => (b[1].totalPoints||0) - (a[1].totalPoints||0)).map(([uid, user]) => {
                   const isSuper = user.role === 'superadmin' || user.email === 'admin@wc2026.com';
                   const isAdm = user.role === 'admin';
                   const lockCount = allUserLocks[uid] ? Object.keys(allUserLocks[uid]).length : 0;
@@ -1778,7 +1821,7 @@ export default function AdminPanel() {
                                         }
                                       }));
                                     }}
-                                    onBlur={e => handleAdminEditPred(m.matchNumber, e.target.value, pred?.score2 ?? '')}
+                                    onBlur={e => handleAdminEditPred(m.matchNumber, e.target.value, document.getElementById(`adm2_${selectedUser.uid}_${m.matchNumber}_s2`)?.value || '')}
                                     id={`adm2_${selectedUser.uid}_${m.matchNumber}_s1`}
                                     key={`s1_${selectedUser.uid}_${userViewComp}_${m.matchNumber}`} />
                                   <span style={{ color: 'var(--text-muted)' }}>-</span>
@@ -1794,7 +1837,7 @@ export default function AdminPanel() {
                                         }
                                       }));
                                     }}
-                                    onBlur={e => handleAdminEditPred(m.matchNumber, pred?.score1 ?? '', e.target.value)}
+                                    onBlur={e => handleAdminEditPred(m.matchNumber, document.getElementById(`adm2_${selectedUser.uid}_${m.matchNumber}_s1`)?.value || '', e.target.value)}
                                     id={`adm2_${selectedUser.uid}_${m.matchNumber}_s2`}
                                     key={`s2_${selectedUser.uid}_${userViewComp}_${m.matchNumber}`} />
                                   {pred && (pred.score1 !== undefined && pred.score2 !== undefined && pred.score1 !== '' && pred.score2 !== '') && (

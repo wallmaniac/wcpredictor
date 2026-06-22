@@ -211,8 +211,11 @@ export default function Leaderboard() {
   const handleAdminEditPred = async (uid, mn, s1, s2) => {
     if (!isAdmin) return;
 
-    // If either score is empty string or null/undefined, delete the prediction
-    if (s1 === '' || s2 === '' || s1 === null || s2 === null || s1 === undefined || s2 === undefined) {
+    const s1Empty = s1 === '' || s1 === null || s1 === undefined;
+    const s2Empty = s2 === '' || s2 === null || s2 === undefined;
+
+    // If both are empty, delete
+    if (s1Empty && s2Empty) {
       try {
         await remove(ref(database, `${fbPath}/users/${uid}/predictions/${mn}`));
         await recalculateAllPoints(competition.id);
@@ -227,9 +230,27 @@ export default function Leaderboard() {
       return;
     }
 
-    await saveAdminPredictionLeaderboardExternal(database, fbPath, uid, mn, s1, s2);
-    await recalculateAllPoints(competition.id);
-    setViewingPreds(p => ({ ...p, [mn]: { score1: parseInt(s1, 10), score2: parseInt(s2, 10) } }));
+    // If only one is empty, update local state only
+    if (s1Empty || s2Empty) {
+      setViewingPreds(p => ({
+        ...p,
+        [mn]: {
+          ...(p[mn] || {}),
+          score1: s1Empty ? '' : parseInt(s1, 10),
+          score2: s2Empty ? '' : parseInt(s2, 10),
+        }
+      }));
+      return;
+    }
+
+    // Both are filled, save
+    try {
+      await saveAdminPredictionLeaderboardExternal(database, fbPath, uid, mn, s1, s2);
+      await recalculateAllPoints(competition.id);
+      setViewingPreds(p => ({ ...p, [mn]: { score1: parseInt(s1, 10), score2: parseInt(s2, 10), editedByAdmin: true } }));
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const closeModal = () => { setViewingUser(null); setViewingPreds({}); setViewingUserLocks({}); setViewingGlobalPicks(null); setViewingGlobalPickResults(null); setModalTab('matches'); };
@@ -387,16 +408,36 @@ export default function Leaderboard() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {isAdmin ? (
             <>
-              <input type="number" min="0" defaultValue={pred?.score1 ?? ''} className="input-glass score-input"
-                key={`s1_${m.matchNumber}_${pred?.score1 ?? ''}`}
+              <input type="number" min="0" value={pred?.score1 ?? ''} className="input-glass score-input"
+                key={`s1_${viewingUser.uid}_${m.matchNumber}`}
                 style={{ width: '40px', padding: '4px', textAlign: 'center', fontSize: '0.85rem' }}
-                onBlur={e => handleAdminEditPred(viewingUser.uid, m.matchNumber, e.target.value, document.getElementById(`adm_${viewingUser.uid}_${m.matchNumber}_s2`)?.value)}
+                onChange={e => {
+                  const val = e.target.value;
+                  setViewingPreds(p => ({
+                    ...p,
+                    [m.matchNumber]: {
+                      ...(p[m.matchNumber] || {}),
+                      score1: val === '' ? '' : parseInt(val, 10)
+                    }
+                  }));
+                }}
+                onBlur={e => handleAdminEditPred(viewingUser.uid, m.matchNumber, e.target.value, document.getElementById(`adm_${viewingUser.uid}_${m.matchNumber}_s2`)?.value || '')}
                 id={`adm_${viewingUser.uid}_${m.matchNumber}_s1`} />
               <span style={{ color: 'var(--text-muted)' }}>-</span>
-              <input type="number" min="0" defaultValue={pred?.score2 ?? ''} className="input-glass score-input"
-                key={`s2_${m.matchNumber}_${pred?.score2 ?? ''}`}
+              <input type="number" min="0" value={pred?.score2 ?? ''} className="input-glass score-input"
+                key={`s2_${viewingUser.uid}_${m.matchNumber}`}
                 style={{ width: '40px', padding: '4px', textAlign: 'center', fontSize: '0.85rem' }}
-                onBlur={e => handleAdminEditPred(viewingUser.uid, m.matchNumber, document.getElementById(`adm_${viewingUser.uid}_${m.matchNumber}_s1`)?.value, e.target.value)}
+                onChange={e => {
+                  const val = e.target.value;
+                  setViewingPreds(p => ({
+                    ...p,
+                    [m.matchNumber]: {
+                      ...(p[m.matchNumber] || {}),
+                      score2: val === '' ? '' : parseInt(val, 10)
+                    }
+                  }));
+                }}
+                onBlur={e => handleAdminEditPred(viewingUser.uid, m.matchNumber, document.getElementById(`adm_${viewingUser.uid}_${m.matchNumber}_s1`)?.value || '', e.target.value)}
                 id={`adm_${viewingUser.uid}_${m.matchNumber}_s2`} />
               {pred && (pred.score1 !== undefined && pred.score2 !== undefined && pred.score1 !== '' && pred.score2 !== '') && (
                 <button onClick={async () => {
@@ -871,10 +912,12 @@ export default function Leaderboard() {
 
                 {/* Match predictions */}
                 {modalTab === 'matches' && (() => {
-                  if (Object.keys(viewingPreds).length === 0) {
+                  if (!isAdmin && Object.keys(viewingPreds).length === 0) {
                     return <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>{t('noPredictionsYet')}</div>;
                   }
-                  const predictedMatches = matches.filter(m => viewingPreds[m.matchNumber]);
+                  const predictedMatches = isAdmin 
+                    ? matches 
+                    : matches.filter(m => viewingPreds[m.matchNumber]);
                   const visiblePreds = predictedMatches.filter(m => {
                     if (isAdmin) return true;
                     if (viewingUser.uid === currentUser?.uid) return true;

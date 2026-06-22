@@ -653,7 +653,7 @@ select.input-glass option:hover { background: #2a2a3a; }
   .match-card { padding: 10px; }
   .match-body { flex-direction: column; align-items: stretch; gap: 6px; }
   .match-teams { font-size: 0.88rem; gap: 6px; flex-wrap: nowrap; }
-  .team-name { max-width: 130px; }
+  .team-name { max-width: none; white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; text-align: center; flex: 1; min-width: 0; }
   .match-actions { justify-content: flex-start; gap: 10px; }
   .match-venue { display: none; }
   .score-input { width: 46px !important; font-size: 0.9rem !important; padding: 6px 4px !important; }
@@ -718,7 +718,7 @@ select.input-glass option:hover { background: #2a2a3a; }
   .match-card { padding: 8px; }
   .match-meta { font-size: 0.65rem; gap: 3px; }
   .match-teams { font-size: 0.82rem; }
-  .team-name { max-width: 110px; }
+  .team-name { max-width: none; white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
   .score-input { width: 40px !important; font-size: 0.85rem !important; padding: 5px 2px !important; }
   .prediction-label { font-size: 0.55rem; }
 }

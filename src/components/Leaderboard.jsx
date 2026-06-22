@@ -5,7 +5,7 @@ import { ref, onValue, get, set, remove } from 'firebase/database';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useCompetition } from '../context/CompetitionContext';
-import { ALL_MATCHES, calculatePoints, formatMatchTime } from '../utils/matchData';
+import { ALL_MATCHES, calculatePoints, formatMatchTime, resolveKnockoutMatches } from '../utils/matchData';
 import { PL_2526_MATCHES, calculatePLPoints, formatPLMatchTime } from '../utils/plMatchData';
 import { recalculateAllPoints, syncLiveScores } from '../services/liveScoreService';
 
@@ -80,7 +80,11 @@ export default function Leaderboard() {
 
   const fbPath = competition.firebasePath;
   const isWC = competition.id === 'wc2026';
-  const matches = isWC ? ALL_MATCHES : PL_2526_MATCHES;
+  const matchesRaw = isWC ? ALL_MATCHES : PL_2526_MATCHES;
+  const matches = useMemo(() => {
+    if (!isWC) return matchesRaw;
+    return resolveKnockoutMatches(matchesRaw, matchResults);
+  }, [matchesRaw, matchResults, isWC]);
   const calcPts = isWC ? calculatePoints : calculatePLPoints;
 
   useEffect(() => {

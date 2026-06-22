@@ -7,7 +7,7 @@ import { database } from '../config/firebase';
 import { ref, get, set, update, remove, onValue, push } from 'firebase/database';
 import { createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../config/firebase';
-import { ALL_MATCHES, calculatePoints, formatMatchTime } from '../utils/matchData';
+import { ALL_MATCHES, calculatePoints, formatMatchTime, resolveKnockoutMatches } from '../utils/matchData';
 import { PL_2526_MATCHES, calculatePLPoints, formatPLMatchTime } from '../utils/plMatchData';
 import { translateTeam, translateStage } from '../utils/translations';
 import { syncLiveScores, recalculateAllPoints, syncPlayerStats, syncStandings } from '../services/liveScoreService';
@@ -1729,7 +1729,10 @@ export default function AdminPanel() {
                           matchday: f.matchday || parseInt(f.round) || 0,
                         }))
                       : (userViewComp === 'wc2026' ? ALL_MATCHES : PL_2526_MATCHES);
-                    const allMatches = [...rawMatches].sort((a, b) => a.matchNumber - b.matchNumber);
+                    const resolvedRawMatches = userViewComp === 'wc2026'
+                      ? resolveKnockoutMatches(rawMatches, viewCompResults)
+                      : rawMatches;
+                    const allMatches = [...resolvedRawMatches].sort((a, b) => a.matchNumber - b.matchNumber);
                     const filtered = allMatches.filter(m => {
                       if (predSearch.trim()) {
                         const q = removeDiacritics(predSearch);

@@ -1062,3 +1062,192 @@ export function formatMatchTime(utcDateStr, utcTimeStr, timeZone, locale) {
     dateKey: dt.toLocaleDateString('en-CA', { timeZone: tz }),
   };
 }
+
+export function resolveKnockoutMatches(rawMatches, liveMatches) {
+  if (!rawMatches || !liveMatches) return rawMatches || [];
+
+  const groupStandings = {};
+  
+  // Initialize teams for each group
+  Object.keys(GROUP_TEAMS).forEach(groupName => {
+    groupStandings[groupName] = GROUP_TEAMS[groupName].map(team => ({
+      name: team, played: 0, won: 0, drawn: 0, lost: 0, gf: 0, ga: 0, gd: 0, pts: 0
+    }));
+  });
+
+  // Process all finished Group Stage matches
+  rawMatches.forEach(match => {
+    if (match.stage === 'Group Stage') {
+      const dbMatch = liveMatches[`match_${match.matchNumber}`];
+      if (dbMatch && dbMatch.status === 'finished') {
+        const standings = groupStandings[match.group];
+        if (standings) {
+          const team1 = standings.find(t => t.name === match.team1);
+          const team2 = standings.find(t => t.name === match.team2);
+          if (team1 && team2) {
+            const s1 = parseInt(dbMatch.score1, 10);
+            const s2 = parseInt(dbMatch.score2, 10);
+            if (!isNaN(s1) && !isNaN(s2)) {
+              team1.played++; team2.played++;
+              team1.gf += s1; team1.ga += s2;
+              team2.gf += s2; team2.ga += s1;
+              if (s1 > s2) {
+                team1.won++; team2.lost++; team1.pts += 3;
+              } else if (s1 < s2) {
+                team2.won++; team1.lost++; team2.pts += 3;
+              } else {
+                team1.drawn++; team2.drawn++; team1.pts += 1; team2.pts += 1;
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  // Sort standings for each group
+  const resolvedGroups = {};
+  Object.keys(groupStandings).forEach(groupName => {
+    groupStandings[groupName].forEach(t => t.gd = t.gf - t.ga);
+    resolvedGroups[groupName] = [...groupStandings[groupName]].sort((a, b) => {
+      if (b.pts !== a.pts) return b.pts - a.pts;
+      if (b.gd !== a.gd) return b.gd - a.gd;
+      return b.gf - a.gf;
+    });
+  });
+
+  // Calculate 3rd place standings
+  const thirdPlaceTeams = [];
+  Object.keys(resolvedGroups).forEach(groupName => {
+    const team = resolvedGroups[groupName][2];
+    if (team) {
+      thirdPlaceTeams.push({ ...team, group: groupName });
+    }
+  });
+
+  // Sort third place teams to find the top 8
+  thirdPlaceTeams.sort((a, b) => {
+    if (b.pts !== a.pts) return b.pts - a.pts;
+    if (b.gd !== a.gd) return b.gd - a.gd;
+    return b.gf - a.gf;
+  });
+
+  const top8Thirds = thirdPlaceTeams.slice(0, 8);
+  const assignedThirds = new Set();
+
+  // Process and resolve all matches in order
+  const resolvedMatches = [];
+
+  const getWinnerOfMatch = (mNum) => {
+    const dbMatch = liveMatches[`match_${mNum}`];
+    if (!dbMatch || dbMatch.status !== 'finished') return null;
+    
+    const resMatch = resolvedMatches.find(x => x.matchNumber === mNum);
+    if (!resMatch) return null;
+
+    if (dbMatch.winner) return dbMatch.winner;
+
+    const s1 = parseInt(dbMatch.score1, 10);
+    const s2 = parseInt(dbMatch.score2, 10);
+    if (s1 > s2) return resMatch.team1;
+    if (s2 > s1) return resMatch.team2;
+
+    if (dbMatch.penaltyWinner) return dbMatch.penaltyWinner;
+    return `${resMatch.team1} (Penalties)`;
+  };
+
+  const getLoserOfMatch = (mNum) => {
+    const dbMatch = liveMatches[`match_${mNum}`];
+    if (!dbMatch || dbMatch.status !== 'finished') return null;
+    
+    const resMatch = resolvedMatches.find(x => x.matchNumber === mNum);
+    if (!resMatch) return null;
+
+    if (dbMatch.loser) return dbMatch.loser;
+
+    const s1 = parseInt(dbMatch.score1, 10);
+    const s2 = parseInt(dbMatch.score2, 10);
+    if (s1 < s2) return resMatch.team1;
+    if (s2 < s1) return resMatch.team2;
+
+    if (dbMatch.penaltyWinner) {
+      return dbMatch.penaltyWinner === resMatch.team1 ? resMatch.team2 : resMatch.team1;
+    }
+    return `${resMatch.team2} (Lost Pens)`;
+  };
+
+  const resolveTeamName = (teamStr, matchNum) => {
+    if (!teamStr) return '';
+    
+    // 1. Winner Group X
+    let m = teamStr.match(/^Winner Group ([A-L])$/i);
+    if (m) {
+      const g = m[1];
+      const groupTeams = groupStandings[g] || [];
+      const hasPlayed = groupTeams.some(t => t.played > 0);
+      if (!hasPlayed) return teamStr;
+      return resolvedGroups[g]?.[0]?.name || teamStr;
+    }
+
+    // 2. Runner-up Group X
+    m = teamStr.match(/^Runner-up Group ([A-L])$/i);
+    if (m) {
+      const g = m[1];
+      const groupTeams = groupStandings[g] || [];
+      const hasPlayed = groupTeams.some(t => t.played > 0);
+      if (!hasPlayed) return teamStr;
+      return resolvedGroups[g]?.[1]?.name || teamStr;
+    }
+
+    // 3. 3rd Group A/B/C/D/F ...
+    m = teamStr.match(/^3rd Group ([A-L](?:\/[A-L])*)$/i);
+    if (m) {
+      const allowedGroups = m[1].split('/');
+      const anyPlayed = allowedGroups.some(g => (groupStandings[g] || []).some(t => t.played > 0));
+      if (!anyPlayed) return teamStr;
+      
+      const found = top8Thirds.find(t => allowedGroups.includes(t.group) && !assignedThirds.has(t.group));
+      if (found) {
+        assignedThirds.add(found.group);
+        return found.name;
+      }
+      return teamStr;
+    }
+
+    // 4. Winner of Match X
+    m = teamStr.match(/^W(\d+)$/i);
+    if (m) {
+      const parentNum = parseInt(m[1], 10);
+      return getWinnerOfMatch(parentNum) || teamStr;
+    }
+
+    // 5. Loser of Match X
+    m = teamStr.match(/^L(\d+)$/i);
+    if (m) {
+      const parentNum = parseInt(m[1], 10);
+      return getLoserOfMatch(parentNum) || teamStr;
+    }
+
+    return teamStr;
+  };
+
+  // Sort rawMatches by matchNumber to guarantee parent matches are resolved before children
+  const sortedRawMatches = [...rawMatches].sort((a, b) => a.matchNumber - b.matchNumber);
+
+  sortedRawMatches.forEach(match => {
+    // If it's a knockout match, resolve its team1 and team2
+    if (match.stage !== 'Group Stage') {
+      const resolvedTeam1 = resolveTeamName(match.team1, match.matchNumber);
+      const resolvedTeam2 = resolveTeamName(match.team2, match.matchNumber);
+      resolvedMatches.push({
+        ...match,
+        team1: resolvedTeam1,
+        team2: resolvedTeam2
+      });
+    } else {
+      resolvedMatches.push({ ...match });
+    }
+  });
+
+  return resolvedMatches.sort((a, b) => a.matchNumber - b.matchNumber);
+}

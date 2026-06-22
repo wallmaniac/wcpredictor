@@ -5,7 +5,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { useCompetition } from '../context/CompetitionContext';
 import { database } from '../config/firebase';
 import { ref, onValue, set, get } from 'firebase/database';
-import { ALL_MATCHES, calculatePoints, formatMatchTime } from '../utils/matchData';
+import { ALL_MATCHES, calculatePoints, formatMatchTime, resolveKnockoutMatches } from '../utils/matchData';
 import { PL_2526_MATCHES, calculatePLPoints, formatPLMatchTime } from '../utils/plMatchData';
 import { translateTeam, translateStage } from '../utils/translations';
 import { syncLiveScores } from '../services/liveScoreService';
@@ -80,7 +80,11 @@ export default function MatchList() {
   const fbPath = competition.firebasePath;
 
   // ALWAYS use hardcoded matches — predictions are keyed to these numbers
-  const rawMatches = isWC ? ALL_MATCHES : PL_2526_MATCHES;
+  const rawMatchesRaw = isWC ? ALL_MATCHES : PL_2526_MATCHES;
+  const rawMatches = useMemo(() => {
+    if (!isWC) return rawMatchesRaw;
+    return resolveKnockoutMatches(rawMatchesRaw, liveMatches);
+  }, [rawMatchesRaw, liveMatches, isWC]);
 
   // Annotate WC group matches with round number
   const matches = useMemo(() => {

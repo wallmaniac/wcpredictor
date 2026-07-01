@@ -1034,7 +1034,7 @@ export const ALL_MATCHES = [...WC_2026_MATCHES,...WC_2026_KNOCKOUT_MATCHES];
 export const GLOBAL_PREDICTIONS_DEADLINE = "2026-06-11T19:00:00Z";
 export const FIXTURES_VERSION = "2026-06-12-chronological";
 
-export const calculatePoints = (prediction, actual) => {
+export const calculatePoints = (prediction, actual, match) => {
   if (!prediction || !actual) return 0;
   if (actual.status && actual.status !== 'finished') return 0;
   const p1 = prediction.score1;
@@ -1044,10 +1044,29 @@ export const calculatePoints = (prediction, actual) => {
     return 0;
   }
   const a1 = actual.score1, a2 = actual.score2;
-  if (p1 === a1 && p2 === a2) return 3;
-  const pr = p1 > p2 ? "W" : p1 < p2 ? "L" : "D";
-  const ar = a1 > a2 ? "W" : a1 < a2 ? "L" : "D";
-  return pr === ar ? 1 : 0;
+  
+  let pts = 0;
+  
+  // 1. Regular 90-minute points
+  const exactMatch = p1 === a1 && p2 === a2;
+  if (exactMatch) {
+    pts = 3;
+  } else {
+    const pr = p1 > p2 ? "W" : p1 < p2 ? "L" : "D";
+    const ar = a1 > a2 ? "W" : a1 < a2 ? "L" : "D";
+    if (pr === ar) pts = 1;
+  }
+
+  // 2. Knockout qualifier bonus point (+1 pt)
+  // Only applies if the user predicted a draw (p1 === p2)
+  if (p1 === p2 && match && match.stage && match.stage !== 'Group Stage') {
+    const actualWinner = actual.winner || actual.penaltyWinner || (actual.score1 > actual.score2 ? match.team1 : (actual.score1 < actual.score2 ? match.team2 : null));
+    if (prediction.qualifier && actualWinner && prediction.qualifier === actualWinner) {
+      pts += 1;
+    }
+  }
+
+  return pts;
 };
 
 // Convert UTC time to user's timezone
@@ -1139,32 +1158,32 @@ export function resolveKnockoutMatches(rawMatches, liveMatches) {
   // Process and resolve all matches in order
   const resolvedMatches = [];
 
-  const getWinnerOfMatch = (mNum) => {
+  function getWinnerOfMatch(mNum) {
     const dbMatch = liveMatches[`match_${mNum}`];
     if (!dbMatch || dbMatch.status !== 'finished') return null;
     
     const resMatch = resolvedMatches.find(x => x.matchNumber === mNum);
     if (!resMatch) return null;
 
-    if (dbMatch.winner) return dbMatch.winner;
+    if (dbMatch.winner) return resolveTeamName(dbMatch.winner, mNum);
 
     const s1 = parseInt(dbMatch.score1, 10);
     const s2 = parseInt(dbMatch.score2, 10);
     if (s1 > s2) return resMatch.team1;
     if (s2 > s1) return resMatch.team2;
 
-    if (dbMatch.penaltyWinner) return dbMatch.penaltyWinner;
+    if (dbMatch.penaltyWinner) return resolveTeamName(dbMatch.penaltyWinner, mNum);
     return `${resMatch.team1} (Penalties)`;
-  };
+  }
 
-  const getLoserOfMatch = (mNum) => {
+  function getLoserOfMatch(mNum) {
     const dbMatch = liveMatches[`match_${mNum}`];
     if (!dbMatch || dbMatch.status !== 'finished') return null;
     
     const resMatch = resolvedMatches.find(x => x.matchNumber === mNum);
     if (!resMatch) return null;
 
-    if (dbMatch.loser) return dbMatch.loser;
+    if (dbMatch.loser) return resolveTeamName(dbMatch.loser, mNum);
 
     const s1 = parseInt(dbMatch.score1, 10);
     const s2 = parseInt(dbMatch.score2, 10);
@@ -1172,12 +1191,13 @@ export function resolveKnockoutMatches(rawMatches, liveMatches) {
     if (s2 < s1) return resMatch.team2;
 
     if (dbMatch.penaltyWinner) {
-      return dbMatch.penaltyWinner === resMatch.team1 ? resMatch.team2 : resMatch.team1;
+      const pWinnerResolved = resolveTeamName(dbMatch.penaltyWinner, mNum);
+      return pWinnerResolved === resMatch.team1 ? resMatch.team2 : resMatch.team1;
     }
     return `${resMatch.team2} (Lost Pens)`;
-  };
+  }
 
-  const resolveTeamName = (teamStr, matchNum) => {
+  function resolveTeamName(teamStr, matchNum) {
     if (!teamStr) return '';
     
     // 1. Winner Group X
@@ -1206,11 +1226,42 @@ export function resolveKnockoutMatches(rawMatches, liveMatches) {
       const allowedGroups = m[1].split('/');
       const anyPlayed = allowedGroups.some(g => (groupStandings[g] || []).some(t => t.played > 0));
       if (!anyPlayed) return teamStr;
+
+      // Preferred order of group assignment for each match number to match official combinations
+      const preferences = {
+        74: ['D', 'A', 'B', 'C', 'F'],
+        77: ['F', 'C', 'G', 'H', 'D'],
+        79: ['E', 'C', 'F', 'H', 'I'],
+        80: ['K', 'E', 'H', 'I', 'J'],
+        81: ['B', 'E', 'F', 'I', 'J'],
+        82: ['I', 'A', 'E', 'H', 'J'],
+        85: ['G', 'J', 'E', 'F', 'I'],
+        87: ['L', 'D', 'E', 'I', 'J']
+      };
+
+      const matchPrefs = preferences[matchNum] || allowedGroups;
       
-      const found = top8Thirds.find(t => allowedGroups.includes(t.group) && !assignedThirds.has(t.group));
-      if (found) {
-        assignedThirds.add(found.group);
-        return found.name;
+      // Find the first group in matchPrefs that is qualified and not assigned yet
+      let foundGroup = null;
+      for (const g of matchPrefs) {
+        if (top8Thirds.some(t => t.group === g) && !assignedThirds.has(g)) {
+          foundGroup = g;
+          break;
+        }
+      }
+
+      // Fallback to greedy if preferred group not found
+      if (!foundGroup) {
+        const found = top8Thirds.find(t => allowedGroups.includes(t.group) && !assignedThirds.has(t.group));
+        if (found) {
+          foundGroup = found.group;
+        }
+      }
+
+      if (foundGroup) {
+        assignedThirds.add(foundGroup);
+        const teamObj = top8Thirds.find(t => t.group === foundGroup);
+        return teamObj ? teamObj.name : teamStr;
       }
       return teamStr;
     }
@@ -1230,7 +1281,7 @@ export function resolveKnockoutMatches(rawMatches, liveMatches) {
     }
 
     return teamStr;
-  };
+  }
 
   // Sort rawMatches by matchNumber to guarantee parent matches are resolved before children
   const sortedRawMatches = [...rawMatches].sort((a, b) => a.matchNumber - b.matchNumber);

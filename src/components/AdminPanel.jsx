@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -7,8 +7,8 @@ import { database } from '../config/firebase';
 import { ref, get, set, update, remove, onValue, push } from 'firebase/database';
 import { createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../config/firebase';
-import { ALL_MATCHES, calculatePoints, formatMatchTime, resolveKnockoutMatches } from '../utils/matchData';
-import { PL_2526_MATCHES, calculatePLPoints, formatPLMatchTime } from '../utils/plMatchData';
+import { ALL_MATCHES, calculatePoints, formatMatchTime, resolveKnockoutMatches, TEAMS } from '../utils/matchData';
+import { PL_2526_MATCHES, calculatePLPoints, formatPLMatchTime, PL_LEAGUE_TABLE_TEAMS } from '../utils/plMatchData';
 import { translateTeam, translateStage } from '../utils/translations';
 import { syncLiveScores, recalculateAllPoints, syncPlayerStats, syncStandings } from '../services/liveScoreService';
 import { TIMEZONE_LIST } from '../utils/timezones';
@@ -24,13 +24,17 @@ async function confirmPaymentExternal(database, lid, uid, entryFee, currentUserU
   });
 }
 
-async function saveAdminPredictionExternal(database, path, uid, matchNum, s1, s2) {
-  await set(ref(database, `${path}/users/${uid}/predictions/${matchNum}`), {
+async function saveAdminPredictionExternal(database, path, uid, matchNum, s1, s2, qualifier) {
+  const data = {
     score1: parseInt(s1, 10),
     score2: parseInt(s2, 10),
     timestamp: Date.now(),
     editedByAdmin: true
-  });
+  };
+  if (qualifier) {
+    data.qualifier = qualifier;
+  }
+  await set(ref(database, `${path}/users/${uid}/predictions/${matchNum}`), data);
 }
 
 function removeDiacritics(str) {
@@ -54,8 +58,9 @@ export default function AdminPanel() {
   const [users, setUsers] = useState({});
   const [leagues, setLeagues] = useState({});
   const [selectedMatch, setSelectedMatch] = useState('');
-  const [score1, setScore1] = useState('');
+   const [score1, setScore1] = useState('');
   const [score2, setScore2] = useState('');
+  const [manualWinner, setManualWinner] = useState('');
   const [matchResults, setMatchResults] = useState({});
   const [updateLeaderboardOnStatsSave, setUpdateLeaderboardOnStatsSave] = useState(false);
   const [matchSearchQuery, setMatchSearchQuery] = useState('');
@@ -101,6 +106,10 @@ export default function AdminPanel() {
   const modalRef = useRef(null);
   const [viewCompFixtures, setViewCompFixtures] = useState({});
   const [viewCompResults, setViewCompResults] = useState({});
+  const [editGlobalPicks, setEditGlobalPicks] = useState({
+    champion: '', secondPlace: '', thirdPlace: '',
+    topScorer: '', topAssist: '', topGoalkeeper: ''
+  });
 
   useEffect(() => {
     if (!selectedUser || !userViewComp) return;
@@ -123,7 +132,11 @@ export default function AdminPanel() {
 
   const fbPath = competition.firebasePath;
   const isWC = competition.id === 'wc2026';
-  const matchList = isWC ? ALL_MATCHES : PL_2526_MATCHES;
+  const rawMatchList = isWC ? ALL_MATCHES : PL_2526_MATCHES;
+  const matchList = useMemo(() => {
+    if (!isWC) return rawMatchList;
+    return resolveKnockoutMatches(rawMatchList, matchResults);
+  }, [rawMatchList, matchResults, isWC]);
 
   useEffect(() => {
     autoSelectInitialized.current = false;
@@ -172,13 +185,16 @@ export default function AdminPanel() {
       if (res) {
         setScore1(res.score1 !== null && res.score1 !== undefined ? String(res.score1) : '');
         setScore2(res.score2 !== null && res.score2 !== undefined ? String(res.score2) : '');
+        setManualWinner(res.winner || res.penaltyWinner || '');
       } else {
         setScore1('');
         setScore2('');
+        setManualWinner('');
       }
     } else {
       setScore1('');
       setScore2('');
+      setManualWinner('');
     }
   }, [selectedMatch, matchResults]);
 
@@ -219,9 +235,33 @@ export default function AdminPanel() {
   // Score
   const handleSaveScore = async () => {
     if (!selectedMatch || score1 === '' || score2 === '') return;
-    await set(ref(database, `${fbPath}/match_results/match_${selectedMatch}`), {
-      score1: parseInt(score1), score2: parseInt(score2), status: 'finished', isPlayed: true, updatedAt: Date.now()
-    });
+    
+    const m = matchList.find(x => String(x.matchNumber) === String(selectedMatch));
+    const isKnockout = m && m.stage && m.stage !== 'Group Stage';
+    const isDraw = parseInt(score1, 10) === parseInt(score2, 10);
+    
+    if (isKnockout && isDraw && !manualWinner) {
+      alert(lang === 'hr' 
+        ? '⚠️ Budući da je rezultat neriješen u nokaut fazi, morate odabrati ekipu koja prolazi!' 
+        : '⚠️ Since the result is a draw in the knockout stage, you must select the team to progress!');
+      return;
+    }
+    
+    const payload = {
+      score1: parseInt(score1, 10),
+      score2: parseInt(score2, 10),
+      status: 'finished',
+      isPlayed: true,
+      updatedAt: Date.now()
+    };
+    
+    if (isKnockout && isDraw && manualWinner) {
+      payload.winner = manualWinner;
+      payload.penaltyWinner = manualWinner;
+      payload.loser = manualWinner === m.team1 ? m.team2 : m.team1;
+    }
+    
+    await set(ref(database, `${fbPath}/match_results/match_${selectedMatch}`), payload);
     await recalculateAllPoints(competition.id);
     showMsg(lang === 'hr' ? `✅ Utakmica ${selectedMatch} spremljena!` : `✅ Match ${selectedMatch} saved!`);
 
@@ -575,6 +615,15 @@ export default function AdminPanel() {
       }
     } catch (e) { console.error(e); }
     setSelectedUser({ uid, data });
+    const gp = data?.globalPicks || {};
+    setEditGlobalPicks({
+      champion: gp.champion || '',
+      secondPlace: gp.secondPlace || '',
+      thirdPlace: gp.thirdPlace || '',
+      topScorer: gp.topScorer || '',
+      topAssist: gp.topAssist || '',
+      topGoalkeeper: gp.topGoalkeeper || ''
+    });
     setEditName(data?.displayName || '');
     setEditTZ(data?.timezone || '');
     setEditHidden(data?.hidden === true);
@@ -630,7 +679,34 @@ export default function AdminPanel() {
     showMsg(lang === 'hr' ? `✅ Profil ažuriran za ${editName}` : `✅ Profile updated for ${editName}`);
   };
 
-  const handleAdminEditPred = async (matchNum, s1, s2) => {
+  const handleAdminSaveGlobalPicks = async () => {
+    if (!selectedUser) return;
+    const compPath = userViewComp === 'wc2026' ? 'wc2026' : 'pl2526';
+    try {
+      await set(ref(database, `${compPath}/users/${selectedUser.uid}/globalPicks`), editGlobalPicks);
+      setSelectedUser(prev => prev && prev.uid === selectedUser.uid ? {
+        ...prev,
+        data: { ...prev.data, globalPicks: editGlobalPicks }
+      } : prev);
+      setUsers(prev => {
+        if (!prev[selectedUser.uid]) return prev;
+        return {
+          ...prev,
+          [selectedUser.uid]: {
+            ...prev[selectedUser.uid],
+            globalPicks: editGlobalPicks
+          }
+        };
+      });
+      await recalculateAllPoints(userViewComp);
+      showMsg(lang === 'hr' ? `✅ Globalna predviđanja spremljena!` : `✅ Global predictions saved!`);
+    } catch (err) {
+      console.error(err);
+      showMsg(`❌ Error: ${err.message}`);
+    }
+  };
+
+  const handleAdminEditPred = async (matchNum, s1, s2, qualifier) => {
     if (!selectedUser) return;
     const compId = userViewComp;
     const path = compId === 'wc2026' ? 'wc2026' : 'pl2526';
@@ -669,6 +745,8 @@ export default function AdminPanel() {
       return;
     }
     
+    const finalQualifier = qualifier !== undefined ? qualifier : (userPreds[matchNum]?.qualifier || null);
+
     // Optimistically update local state synchronously first
     setUserPreds(p => ({
       ...p,
@@ -676,17 +754,44 @@ export default function AdminPanel() {
         ...(p[matchNum] || {}),
         score1: parseInt(s1, 10),
         score2: parseInt(s2, 10),
+        qualifier: finalQualifier,
         editedByAdmin: true
       }
     }));
 
     try {
-      await saveAdminPredictionExternal(database, path, selectedUser.uid, matchNum, s1, s2);
+      await saveAdminPredictionExternal(database, path, selectedUser.uid, matchNum, s1, s2, finalQualifier);
       await recalculateAllPoints(compId);
     } catch (err) {
       console.error(err);
       showMsg(`❌ Error: ${err.message}`);
       // Revert local state to matches database on failure
+      await loadUserPreds(selectedUser.uid, path);
+    }
+  };
+
+  const handleAdminEditQualifier = async (matchNum, qualifier) => {
+    if (!selectedUser) return;
+    const compId = userViewComp;
+    const path = compId === 'wc2026' ? 'wc2026' : 'pl2526';
+    const pred = userPreds[matchNum];
+    if (!pred || pred.score1 === undefined || pred.score2 === undefined || pred.score1 === '' || pred.score2 === '') return;
+
+    setUserPreds(p => ({
+      ...p,
+      [matchNum]: {
+        ...p[matchNum],
+        qualifier,
+        editedByAdmin: true
+      }
+    }));
+
+    try {
+      await saveAdminPredictionExternal(database, path, selectedUser.uid, matchNum, pred.score1, pred.score2, qualifier);
+      await recalculateAllPoints(compId);
+    } catch (err) {
+      console.error(err);
+      showMsg(`❌ Error: ${err.message}`);
       await loadUserPreds(selectedUser.uid, path);
     }
   };
@@ -704,6 +809,15 @@ export default function AdminPanel() {
       const compSnap = await get(ref(database, `${path}/users/${selectedUser.uid}`));
       if (compSnap.exists()) {
         const compData = compSnap.val();
+        const gp = compData.globalPicks || {};
+        setEditGlobalPicks({
+          champion: gp.champion || '',
+          secondPlace: gp.secondPlace || '',
+          thirdPlace: gp.thirdPlace || '',
+          topScorer: gp.topScorer || '',
+          topAssist: gp.topAssist || '',
+          topGoalkeeper: gp.topGoalkeeper || ''
+        });
         setSelectedUser(prev => ({
           ...prev,
           data: {
@@ -714,6 +828,8 @@ export default function AdminPanel() {
             globalPicksLocked: compData.globalPicksLocked,
           }
         }));
+      } else {
+        setEditGlobalPicks({ champion: '', secondPlace: '', thirdPlace: '', topScorer: '', topAssist: '', topGoalkeeper: '' });
       }
     } catch (e) { console.error('Failed to reload lock data:', e); }
   };
@@ -933,6 +1049,57 @@ export default function AdminPanel() {
                       <span style={{ color: 'var(--text-muted)', fontWeight: 'bold', fontSize: '1.2rem' }}>-</span>
                       <input type="number" className="input-glass" placeholder={t('awayScore')} value={score2} onChange={e => setScore2(e.target.value)} min="0" style={{ width: '65px', padding: '8px', textAlign: 'center', fontSize: '0.95rem' }} />
                     </div>
+                    {(() => {
+                      const m = matchList.find(x => String(x.matchNumber) === String(selectedMatch));
+                      const isKnockout = m && m.stage && m.stage !== 'Group Stage';
+                      const isDraw = score1 !== '' && score2 !== '' && parseInt(score1, 10) === parseInt(score2, 10);
+                      if (isKnockout && isDraw) {
+                        return (
+                          <div style={{ 
+                            display: 'flex', 
+                            flexDirection: 'column', 
+                            alignItems: 'center', 
+                            gap: '6px', 
+                            marginBottom: '14px',
+                            background: 'rgba(255,184,0,0.06)',
+                            padding: '10px',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(255,184,0,0.2)'
+                          }}>
+                            <div style={{ fontSize: '0.75rem', color: '#FFB800', fontWeight: 600 }}>
+                              🏆 {lang === 'hr' ? 'Tko prolazi dalje?' : 'Who progresses?'}
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', width: '100%', justifyContent: 'center' }}>
+                              <button 
+                                onClick={() => setManualWinner(m.team1)}
+                                style={{
+                                  padding: '6px 12px', fontSize: '0.75rem', borderRadius: '6px', cursor: 'pointer',
+                                  background: manualWinner === m.team1 ? 'rgba(0,255,136,0.12)' : 'rgba(255,255,255,0.03)',
+                                  color: manualWinner === m.team1 ? 'var(--primary)' : 'var(--text-main)',
+                                  border: `1px solid ${manualWinner === m.team1 ? 'rgba(0,255,136,0.4)' : 'rgba(255,255,255,0.08)'}`,
+                                  fontWeight: 600, flex: 1, textAlign: 'center', transition: 'all 0.2s'
+                                }}
+                              >
+                                {tt(m.team1)}
+                              </button>
+                              <button 
+                                onClick={() => setManualWinner(m.team2)}
+                                style={{
+                                  padding: '6px 12px', fontSize: '0.75rem', borderRadius: '6px', cursor: 'pointer',
+                                  background: manualWinner === m.team2 ? 'rgba(0,255,136,0.12)' : 'rgba(255,255,255,0.03)',
+                                  color: manualWinner === m.team2 ? 'var(--primary)' : 'var(--text-main)',
+                                  border: `1px solid ${manualWinner === m.team2 ? 'rgba(0,255,136,0.4)' : 'rgba(255,255,255,0.08)'}`,
+                                  fontWeight: 600, flex: 1, textAlign: 'center', transition: 'all 0.2s'
+                                }}
+                              >
+                                {tt(m.team2)}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                     <div style={{ display: 'flex', gap: '8px' }}>
                       <button onClick={handleSaveScore} className="btn-primary" style={{ flex: 2, padding: '10px 14px', fontSize: '0.82rem', whiteSpace: 'nowrap', background: 'var(--primary)', color: '#000' }}>💾 {t('saveScore')}</button>
                       <button onClick={handleClearResult} style={{ flex: 1, padding: '10px 10px', whiteSpace: 'nowrap', background: 'rgba(255,50,50,0.12)', color: '#ff5555', border: '1px solid rgba(255,50,50,0.25)', borderRadius: '8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.82rem' }}>
@@ -1636,48 +1803,77 @@ export default function AdminPanel() {
                   const targetStart = userViewComp === 'wc2026' ? new Date('2026-06-11T19:00:00Z') : new Date('2025-08-16T00:00:00Z');
                   const isAfterStart = Date.now() >= targetStart.getTime();
                   const isGlobalLocked = selectedUser.data?.globalPicksLocked === true || (isAfterStart && selectedUser.data?.globalPicksLocked !== false);
-                  
+                  const teamList = userViewComp === 'wc2026' ? TEAMS : PL_LEAGUE_TABLE_TEAMS;
+                  const categories = [
+                    { key: 'champion', icon: '🏆', label: userViewComp === 'wc2026' ? t('champion') : t('leagueChampion'), type: 'select' },
+                    { key: 'secondPlace', icon: '🥈', label: userViewComp === 'wc2026' ? t('secondPlace') : t('secondPlacePL'), type: 'select' },
+                    { key: 'thirdPlace', icon: '🥉', label: userViewComp === 'wc2026' ? t('thirdPlace') : t('thirdPlacePL'), type: 'select' },
+                    { key: 'topScorer', icon: '👟', label: userViewComp === 'wc2026' ? t('topScorer') : t('goldenBoot'), type: 'text' },
+                    { key: 'topAssist', icon: '🎯', label: userViewComp === 'wc2026' ? t('topAssist') : t('mostAssists'), type: 'text' },
+                    { key: 'topGoalkeeper', icon: '🧤', label: userViewComp === 'wc2026' ? t('topGoalkeeper') : t('goldenGlove'), type: 'text' },
+                  ];
+
                   return (
                     <div style={{ background: 'rgba(144,76,255,0.04)', borderRadius: '10px', padding: '14px', marginBottom: '15px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                         <h4 style={{ fontSize: '0.85rem', color: 'var(--secondary)', margin: 0 }}>🌍 {t('globalPredictions')}</h4>
-                        {isGlobalLocked && (
-                          <button onClick={async () => {
-                            const confirmMsg = lang === 'hr'
-                              ? `⚠️ Otključati globalna predviđanja za korisnika ${selectedUser.data?.displayName}?`
-                              : `⚠️ Unlock global picks for ${selectedUser.data?.displayName}?`;
-                            if (!window.confirm(confirmMsg)) return;
-                            const compPath = userViewComp === 'wc2026' ? 'wc2026' : 'pl2526';
-                            try {
-                              await set(ref(database, `${compPath}/users/${selectedUser.uid}/globalPicksLocked`), false);
-                              setSelectedUser(prev => prev && prev.uid === selectedUser.uid ? {
-                                ...prev,
-                                data: { ...prev.data, globalPicksLocked: false }
-                              } : prev);
-                              setUsers(prev => ({ ...prev, [selectedUser.uid]: { ...prev[selectedUser.uid], globalPicksLocked: false } }));
-                              showMsg(`🔓 ${t('globalPicksUnlocked')}`);
-                            } catch (err) {
-                              console.error(err);
-                              showMsg(`❌ Error: ${err.message}`);
-                            }
-                          }} style={{ background: 'rgba(255,50,50,0.12)', color: '#ff5555', border: '1px solid rgba(255,50,50,0.2)', borderRadius: '6px', padding: '3px 8px', fontSize: '0.68rem', cursor: 'pointer' }}>🔓 {t('unlock')}</button>
-                        )}
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                          {isGlobalLocked && (
+                            <button onClick={async () => {
+                              const confirmMsg = lang === 'hr'
+                                ? `⚠️ Otključati globalna predviđanja za korisnika ${selectedUser.data?.displayName}?`
+                                : `⚠️ Unlock global picks for ${selectedUser.data?.displayName}?`;
+                              if (!window.confirm(confirmMsg)) return;
+                              const compPath = userViewComp === 'wc2026' ? 'wc2026' : 'pl2526';
+                              try {
+                                await set(ref(database, `${compPath}/users/${selectedUser.uid}/globalPicksLocked`), false);
+                                setSelectedUser(prev => prev && prev.uid === selectedUser.uid ? {
+                                  ...prev,
+                                  data: { ...prev.data, globalPicksLocked: false }
+                                } : prev);
+                                setUsers(prev => ({ ...prev, [selectedUser.uid]: { ...prev[selectedUser.uid], globalPicksLocked: false } }));
+                                showMsg(`🔓 ${t('globalPicksUnlocked')}`);
+                              } catch (err) {
+                                console.error(err);
+                                showMsg(`❌ Error: ${err.message}`);
+                              }
+                            }} style={{ background: 'rgba(255,50,50,0.12)', color: '#ff5555', border: '1px solid rgba(255,50,50,0.2)', borderRadius: '4px', padding: '2px 6px', fontSize: '0.65rem', cursor: 'pointer' }}>🔓 {t('unlock')}</button>
+                          )}
+                          <button onClick={handleAdminSaveGlobalPicks} className="btn-primary" style={{ padding: '4px 10px', fontSize: '0.68rem' }}>💾 {lang === 'hr' ? 'Spremi prognoze' : 'Save Picks'}</button>
+                        </div>
                       </div>
-                      {(() => {
-                        const gp = selectedUser.data?.globalPicks || {};
-                        const hasGP = Object.values(gp).some(v => v && String(v).trim());
-                        if (!hasGP) return <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', margin: 0 }}>{t('noGlobalPicksSet')}</p>;
-                        return (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '0.78rem' }}>
-                            {[['champion','🏆'],['secondPlace','🥈'],['thirdPlace','🥉'],['topScorer','👟'],['topAssist','🎯'],['topGoalkeeper','🧤']].map(([k, icon]) => (
-                              <div key={k} style={{ color: 'var(--text-muted)' }}>
-                                <span style={{ fontWeight: 600 }}>{icon}</span> {gp[k] ? tt(gp[k]) : '—'}
-                              </div>
-                            ))}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        {categories.map(({ key: k, icon, label, type }) => (
+                          <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                              <span>{icon}</span> {label}
+                            </label>
+                            {type === 'select' ? (
+                              <select 
+                                className="input-glass"
+                                value={editGlobalPicks[k] || ''}
+                                onChange={e => setEditGlobalPicks(prev => ({ ...prev, [k]: e.target.value }))}
+                                style={{ fontSize: '0.78rem', padding: '5px 8px', height: '30px', boxSizing: 'border-box' }}
+                              >
+                                <option value="">—</option>
+                                {teamList.map(tName => (
+                                  <option key={tName} value={tName}>{tt(tName)}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input 
+                                className="input-glass"
+                                type="text"
+                                value={editGlobalPicks[k] || ''}
+                                onChange={e => setEditGlobalPicks(prev => ({ ...prev, [k]: e.target.value }))}
+                                placeholder={label}
+                                style={{ fontSize: '0.78rem', padding: '5px 8px', height: '30px', boxSizing: 'border-box' }}
+                              />
+                            )}
                           </div>
-                        );
-                      })()}
-                      {isGlobalLocked && <span style={{ fontSize: '0.65rem', color: 'var(--primary)', marginTop: '6px', display: 'inline-block' }}>🔒 {t('locked')}</span>}
+                        ))}
+                      </div>
+                      {isGlobalLocked && <span style={{ fontSize: '0.65rem', color: 'var(--primary)', marginTop: '8px', display: 'inline-block' }}>🔒 {t('locked')}</span>}
                     </div>
                   );
                 })()}
@@ -1824,7 +2020,7 @@ export default function AdminPanel() {
                                         }
                                       }));
                                     }}
-                                    onBlur={e => handleAdminEditPred(m.matchNumber, e.target.value, document.getElementById(`adm2_${selectedUser.uid}_${m.matchNumber}_s2`)?.value || '')}
+                                    onBlur={e => handleAdminEditPred(m.matchNumber, e.target.value, pred?.score2 ?? '')}
                                     id={`adm2_${selectedUser.uid}_${m.matchNumber}_s1`}
                                     key={`s1_${selectedUser.uid}_${userViewComp}_${m.matchNumber}`} />
                                   <span style={{ color: 'var(--text-muted)' }}>-</span>
@@ -1840,9 +2036,31 @@ export default function AdminPanel() {
                                         }
                                       }));
                                     }}
-                                    onBlur={e => handleAdminEditPred(m.matchNumber, document.getElementById(`adm2_${selectedUser.uid}_${m.matchNumber}_s1`)?.value || '', e.target.value)}
+                                    onBlur={e => handleAdminEditPred(m.matchNumber, pred?.score1 ?? '', e.target.value)}
                                     id={`adm2_${selectedUser.uid}_${m.matchNumber}_s2`}
                                     key={`s2_${selectedUser.uid}_${userViewComp}_${m.matchNumber}`} />
+                                  {userViewComp === 'wc2026' && m.stage !== 'Group Stage' && pred && pred.score1 !== undefined && pred.score1 === pred.score2 && pred.score1 !== '' && (
+                                    <select
+                                      className="input-glass"
+                                      value={pred.qualifier || ''}
+                                      onChange={e => handleAdminEditQualifier(m.matchNumber, e.target.value || null)}
+                                      style={{ 
+                                        fontSize: '0.72rem', 
+                                        padding: '2px 4px', 
+                                        marginLeft: '4px', 
+                                        height: '24px', 
+                                        color: pred.qualifier ? 'var(--primary)' : '#FFB800',
+                                        border: `1px solid ${pred.qualifier ? 'rgba(0,255,136,0.3)' : 'rgba(255,184,0,0.3)'}`,
+                                        borderRadius: '4px',
+                                        cursor: 'pointer',
+                                        maxWidth: '100px'
+                                      }}
+                                    >
+                                      <option value="">{lang === 'hr' ? 'Prolaz?' : 'Progress?'}</option>
+                                      <option value={m.team1}>{tt(m.team1)}</option>
+                                      <option value={m.team2}>{tt(m.team2)}</option>
+                                    </select>
+                                  )}
                                   {pred && (pred.score1 !== undefined && pred.score2 !== undefined && pred.score1 !== '' && pred.score2 !== '') && (
                                     <button onClick={async () => {
                                       const confirmMsg = lang === 'hr' ? `⚠️ Izbrisati predviđanje za utakmicu #${m.matchNumber}?` : `⚠️ Delete prediction for match #${m.matchNumber}?`;

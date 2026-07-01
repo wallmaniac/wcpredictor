@@ -13,7 +13,7 @@
 
 import { database } from '../config/firebase.js';
 import { ref, update, get, set } from 'firebase/database';
-import { ALL_MATCHES, calculatePoints } from '../utils/matchData.js';
+import { ALL_MATCHES, calculatePoints, resolveKnockoutMatches } from '../utils/matchData.js';
 import { PL_2526_MATCHES, calculatePLPoints } from '../utils/plMatchData.js';
 
 const BASE_URL = 'https://apiv3.apifootball.com/';
@@ -153,21 +153,41 @@ function areNamesSimilar(pick, act) {
   if (p.length < 3 || a.length < 3) return false;
   
   const dist = levenshteinDistance(p, a);
-  const allowedError = a.length >= 6 ? 2 : 1;
-  if (dist <= allowedError) return true;
+  const minLen = Math.min(p.length, a.length);
+  const threshold = minLen < 5 ? 1 : minLen < 8 ? 2 : 3;
+  if (dist <= threshold) return true;
 
-  const pWords = removeDiacritics(pick).split(/\s+/).filter(w => w.length >= 3);
-  const aWords = removeDiacritics(act).split(/\s+/).filter(w => w.length >= 3);
-  for (const pw of pWords) {
-    for (const aw of aWords) {
-      if (pw === aw) return true;
-      const wDist = levenshteinDistance(pw, aw);
-      const wAllowed = aw.length >= 6 ? 2 : 1;
-      if (wDist <= wAllowed) return true;
-    }
-  }
+  const getWords = (name) => {
+    return removeDiacritics(name)
+      .split(/[^a-z0-9]/)
+      .filter(w => w.length > 0);
+  };
   
-  return false;
+  const wordsA = getWords(pick);
+  const wordsB = getWords(act);
+  
+  if (wordsA.length === 0 || wordsB.length === 0) return false;
+  
+  const isWordMatch = (w1, w2) => {
+    if (w1 === w2) return true;
+    if (w1.length === 1 && w2.startsWith(w1)) return true;
+    if (w2.length === 1 && w1.startsWith(w2)) return true;
+    if (w1.length >= 3 && w2.length >= 3) {
+      if (w1.includes(w2) || w2.includes(w1)) return true;
+      if (levenshteinDistance(w1, w2) <= 1) return true;
+    }
+    return false;
+  };
+  
+  if (wordsA.length >= 2 && wordsB.length >= 2) {
+    const shorter = wordsA.length <= wordsB.length ? wordsA : wordsB;
+    const longer = wordsA.length <= wordsB.length ? wordsB : wordsA;
+    return shorter.every(sw => longer.some(lw => isWordMatch(sw, lw)));
+  } else {
+    const sw = wordsA.length === 1 ? wordsA[0] : wordsB[0];
+    const longerList = wordsA.length === 1 ? wordsB : wordsA;
+    return longerList.some(lw => isWordMatch(sw, lw));
+  }
 }
 
 function isGlobalPickMatch(userPick, actualResult) {
@@ -520,10 +540,27 @@ async function recalculateAllPointsFromFixtures(competitionId, fixtures, results
       const r = results[mKey];
       const mNum = mKey.replace('match_', '');
       if (r.status === 'finished' && preds[mNum]) {
-        const pts = calcFn(preds[mNum], r);
+        const matchObj = fixtures?.find(x => String(x.matchNumber) === String(mNum));
+        const pts = calcFn(preds[mNum], r, matchObj);
         totalPoints += pts;
-        if (pts === 3) exactScoresCount++;
-        if (pts === 1) correctResultsCount++;
+        
+        const p1 = preds[mNum].score1;
+        const p2 = preds[mNum].score2;
+        const a1 = r.score1;
+        const a2 = r.score2;
+        if (p1 !== undefined && p1 !== null && p1 !== '' &&
+            p2 !== undefined && p2 !== null && p2 !== '' &&
+            a1 !== undefined && a1 !== null && a2 !== undefined && a2 !== null) {
+          if (p1 === a1 && p2 === a2) {
+            exactScoresCount++;
+          } else {
+            const pr = p1 > p2 ? "W" : p1 < p2 ? "L" : "D";
+            const ar = a1 > a2 ? "W" : a1 < a2 ? "L" : "D";
+            if (pr === ar) {
+              correctResultsCount++;
+            }
+          }
+        }
       }
     }
 
@@ -913,6 +950,8 @@ export async function recalculateAllPoints(competitionId = 'wc2026') {
   const currentMatchesSnap = await get(ref(database, `${config.fbPath}/match_results`));
   const currentMatches = currentMatchesSnap.val() || {};
 
+  const resolvedMatchesList = competitionId === 'wc2026' ? resolveKnockoutMatches(ALL_MATCHES, currentMatches) : PL_2526_MATCHES;
+
   // For PL, read predictions from pl2526/users/<uid>/predictions
   const plUsersSnap = competitionId !== 'wc2026' ? await get(ref(database, `${config.fbPath}/users`)) : null;
   const plUsers = plUsersSnap?.val() || {};
@@ -950,10 +989,27 @@ export async function recalculateAllPoints(competitionId = 'wc2026') {
       const m = currentMatches[mId];
       const mNum = mId.replace('match_', '');
       if (m.status === 'finished' && preds[mNum]) {
-        const pts = config.calcFn(preds[mNum], m);
+        const matchObj = resolvedMatchesList?.find(x => String(x.matchNumber) === String(mNum));
+        const pts = config.calcFn(preds[mNum], m, matchObj);
         matchPoints += pts;
-        if (pts === 3) exactScoresCount++;
-        if (pts === 1) correctResultsCount++;
+
+        const p1 = preds[mNum].score1;
+        const p2 = preds[mNum].score2;
+        const a1 = m.score1;
+        const a2 = m.score2;
+        if (p1 !== undefined && p1 !== null && p1 !== '' &&
+            p2 !== undefined && p2 !== null && p2 !== '' &&
+            a1 !== undefined && a1 !== null && a2 !== undefined && a2 !== null) {
+          if (p1 === a1 && p2 === a2) {
+            exactScoresCount++;
+          } else {
+            const pr = p1 > p2 ? "W" : p1 < p2 ? "L" : "D";
+            const ar = a1 > a2 ? "W" : a1 < a2 ? "L" : "D";
+            if (pr === ar) {
+              correctResultsCount++;
+            }
+          }
+        }
       }
     }
 

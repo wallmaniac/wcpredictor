@@ -1,0 +1,23 @@
+- [x] Update `calculatePoints` signature and logic in `matchData.js`
+- [x] Add qualifier picker buttons and tooltip in `MatchList.jsx`
+- [x] Pass the `match` parameter to `calcPts` in `MatchList.jsx`
+- [x] Render chosen qualifier in `Leaderboard.jsx` and pass match parameter
+- [x] Add penalty winner selector in `AdminPanel.jsx` and save it to the DB
+- [x] Update `liveScoreService.js` to look up matches during points recalculation
+- [x] Verify production build (`npm run build`)
+- [x] Deploy to Firebase (`npx firebase deploy`)
+- [x] Implement auto-scrolling to the last played match when expanding "Played Matches" in all subtabs
+- [x] Convert prediction inputs to controlled components with real-time `onChange` saving to prevent any focus or data loss on auto-lock/navigation
+- [x] Seed correct statistics for Top Goalscorers, Assists based on official FIFA stats
+- [x] Calculate goalkeeper clean sheet statistics programmatically based on match results from the database
+- [x] Rename the Group column to Team/Tim in PlayerStats table and render as a standalone column for everyone
+- [x] Set the Player Stats subtab as the default tab when clicking on the Stats tab
+- [x] Enable admin inline editing (name, team, count), row deletion, and add new player form in PlayerStats subtab
+- [x] Implement save-and-sort stats functionality writing back to Firebase
+- [x] Create clickable player picks list (Who Picked overlay modal) matching user global picks with accent-insensitive fuzzy matching
+- [x] Create simulated leaderboard switch calculating scores on-the-fly using current stats leaders, with tie-handling (multiple winners support)
+- [x] Render warning/info note (Napomena) in knockout stage predictions warning users to pick an advancing team for draw scores
+- [x] Add team selection dropdown menus for admins instead of text inputs
+- [x] Fix save stats and editing reset bugs, making save buttons always visible and protecting typed state
+- [x] Automate clean sheets updating in stats tables and simulated leaderboard directly from match outcomes
+- [x] Add a 👥 users picks view overlay icon next to the name input field in the admin row

@@ -17,7 +17,14 @@ function StatsTab() {
   const { competition } = useCompetition();
   const { t } = useLanguage();
   const isWC = competition.id === 'wc2026';
-  const [sub, setSub] = useState('standings');
+  const [sub, setSub] = useState('players');
+  const [visited, setVisited] = useState({ players: true });
+
+  useEffect(() => {
+    if (sub) {
+      setVisited(prev => prev[sub] ? prev : { ...prev, [sub]: true });
+    }
+  }, [sub]);
 
   return (
     <div>
@@ -29,8 +36,16 @@ function StatsTab() {
           📈 {t('playerStats')}
         </button>
       </div>
-      {sub === 'standings' && (isWC ? <GroupTables /> : <PLLeagueTable />)}
-      {sub === 'players' && <PlayerStats />}
+      {visited.standings && (
+        <div style={{ display: sub === 'standings' ? 'block' : 'none' }}>
+          {isWC ? <GroupTables /> : <PLLeagueTable />}
+        </div>
+      )}
+      {visited.players && (
+        <div style={{ display: sub === 'players' ? 'block' : 'none' }}>
+          <PlayerStats />
+        </div>
+      )}
     </div>
   );
 }
@@ -39,6 +54,13 @@ export default function Dashboard() {
   const { isAdmin } = useAuth();
   const { t } = useLanguage();
   const [activeTab, setActiveTab] = useState('matches');
+  const [visitedTabs, setVisitedTabs] = useState({ matches: true });
+
+  useEffect(() => {
+    if (activeTab) {
+      setVisitedTabs(prev => prev[activeTab] ? prev : { ...prev, [activeTab]: true });
+    }
+  }, [activeTab]);
 
   // Bottom bar: 5 tabs (merged stats, added global picks)
   const bottomTabs = [
@@ -54,20 +76,6 @@ export default function Dashboard() {
     ...bottomTabs,
     ...(isAdmin ? [{ id: 'admin', label: t('adminPanel'), icon: '🔧' }] : []),
   ];
-
-  const renderContent = () => {
-    switch (activeTab) {
-      case 'matches': return <><h2 className="content-title">{t('matchPredictions')}</h2><MatchList /></>;
-      case 'leaderboard': return <Leaderboard />;
-      case 'stats': return <StatsTab />;
-      case 'global': return <GlobalPicks />;
-      case 'leagues': return <UserLeagues />;
-      case 'profile': return <UserProfile />;
-      case 'rules': return <Rules />;
-      case 'admin': return isAdmin ? <AdminPanel /> : null;
-      default: return null;
-    }
-  };
 
   useEffect(() => {
     window.__setDashboardTab = setActiveTab;
@@ -93,8 +101,48 @@ export default function Dashboard() {
               ))}
             </ul>
           </div>
-          <div className="glass-panel content-panel">
-            {renderContent()}
+          <div className="glass-panel content-panel" style={{ position: 'relative' }}>
+            {visitedTabs.matches && (
+              <div style={{ display: activeTab === 'matches' ? 'block' : 'none' }}>
+                <h2 className="content-title">{t('matchPredictions')}</h2>
+                <MatchList />
+              </div>
+            )}
+            {visitedTabs.leaderboard && (
+              <div style={{ display: activeTab === 'leaderboard' ? 'block' : 'none' }}>
+                <Leaderboard />
+              </div>
+            )}
+            {visitedTabs.stats && (
+              <div style={{ display: activeTab === 'stats' ? 'block' : 'none' }}>
+                <StatsTab />
+              </div>
+            )}
+            {visitedTabs.global && (
+              <div style={{ display: activeTab === 'global' ? 'block' : 'none' }}>
+                <GlobalPicks />
+              </div>
+            )}
+            {visitedTabs.leagues && (
+              <div style={{ display: activeTab === 'leagues' ? 'block' : 'none' }}>
+                <UserLeagues />
+              </div>
+            )}
+            {visitedTabs.profile && (
+              <div style={{ display: activeTab === 'profile' ? 'block' : 'none' }}>
+                <UserProfile />
+              </div>
+            )}
+            {visitedTabs.rules && (
+              <div style={{ display: activeTab === 'rules' ? 'block' : 'none' }}>
+                <Rules />
+              </div>
+            )}
+            {isAdmin && visitedTabs.admin && (
+              <div style={{ display: activeTab === 'admin' ? 'block' : 'none' }}>
+                <AdminPanel />
+              </div>
+            )}
           </div>
         </div>
       </div>

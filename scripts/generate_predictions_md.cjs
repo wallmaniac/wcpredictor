@@ -55,7 +55,7 @@ async function run() {
     // Resolve knockout matches
     const resolvedMatches = resolveKnockoutMatches(ALL_MATCHES, liveMatches);
 
-    // Sort users by totalPoints desc
+    // Sort users by totalPoints desc, then exactScores desc, then correctResults desc
     const sortedUsers = Object.entries(users).map(([uid, u]) => ({
       uid,
       displayName: u.displayName || 'Unknown',
@@ -71,7 +71,11 @@ async function run() {
       globalPicksLocked: u.globalPicksLocked === true,
       predictions: u.predictions || {},
       lockedMatches: u.lockedMatches || {},
-    })).sort((a, b) => b.totalPoints - a.totalPoints);
+    })).sort((a, b) => {
+      if (b.totalPoints !== a.totalPoints) return b.totalPoints - a.totalPoints;
+      if (b.exactScores !== a.exactScores) return b.exactScores - a.exactScores;
+      return b.correctResults - a.correctResults;
+    });
 
     let md = `# PredictorZ World Cup 2026 - All Users Predictions & Global Picks\n\n`;
     md += `Generated on: ${formatDateTimeHR(Date.now())} (Zagreb Time)\n\n`;
@@ -119,6 +123,7 @@ async function run() {
         matchNumber: parseInt(mn, 10),
         score1: p.score1,
         score2: p.score2,
+        qualifier: p.qualifier || null,
         timestamp: p.timestamp,
         editedByAdmin: p.editedByAdmin
       })).sort((a, b) => a.matchNumber - b.matchNumber);
@@ -133,7 +138,11 @@ async function run() {
         const predTime = formatDateTimeHR(p.timestamp);
         const notes = p.editedByAdmin ? 'Admin Edited' : '';
         const matchup = `${m.team1} vs ${m.team2}`;
-        md += `| **#${p.matchNumber}** | ${m.stage} | ${matchup} | **${p.score1} - ${p.score2}** | ${statusStr} | ${lockTime} | ${lockTs} | ${predTime} | ${notes} |\n`;
+        let predStr = `**${p.score1} - ${p.score2}**`;
+        if (m.stage !== 'Group Stage' && p.score1 === p.score2 && p.qualifier) {
+          predStr += ` (${p.qualifier})`;
+        }
+        md += `| **#${p.matchNumber}** | ${m.stage} | ${matchup} | ${predStr} | ${statusStr} | ${lockTime} | ${lockTs} | ${predTime} | ${notes} |\n`;
       });
 
       md += `\n\n---\n\n`;
@@ -144,8 +153,10 @@ async function run() {
     fs.writeFileSync(targetPath1, md, 'utf8');
     fs.writeFileSync(targetPath2, md, 'utf8');
     console.log(`Successfully generated and wrote all_users_predictions.md to ${targetPath1} and ${targetPath2}`);
+    process.exit(0);
   } catch (err) {
     console.error("Error during execution:", err);
+    process.exit(1);
   }
 }
 

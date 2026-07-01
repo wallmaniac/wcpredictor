@@ -134,6 +134,7 @@ select.input-glass { cursor: pointer; -webkit-appearance: none; appearance: none
 select.input-glass option { background: #1a1a24; color: #fff; padding: 8px 12px; }
 select.input-glass option:checked { background: #252536; }
 select.input-glass option:hover { background: #2a2a3a; }
+select.input-glass optgroup { background: #1a1a24; color: var(--primary); font-weight: 700; font-family: 'Outfit', sans-serif; font-size: 0.85rem; }
 
 /* ═══════ Layout ═══════ */
 .container { max-width: 1200px; margin: 0 auto; padding-left: 20px; padding-right: 20px; }
@@ -654,7 +655,7 @@ select.input-glass option:hover { background: #2a2a3a; }
   .match-body { flex-direction: column; align-items: stretch; gap: 6px; }
   .match-teams { font-size: 0.88rem; gap: 6px; flex-wrap: nowrap; }
   .team-name { max-width: none; white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; text-align: center; flex: 1; min-width: 0; }
-  .match-actions { justify-content: flex-start; gap: 10px; }
+  .match-actions { justify-content: center; gap: 12px; width: 100%; }
   .match-venue { display: none; }
   .score-input { width: 46px !important; font-size: 0.9rem !important; padding: 6px 4px !important; }
   .result-box { padding: 5px 8px; }

@@ -60,8 +60,40 @@ export default function MatchList() {
   const { t, tt, ts, lang } = useLanguage();
   const { competition } = useCompetition();
   const [predictions, setPredictions] = useState({});
+  const [localPreds, setLocalPreds] = useState({});
   const [liveMatches, setLiveMatches] = useState({});
   const [saving, setSaving] = useState({});
+
+  useEffect(() => {
+    const next = { ...localPreds };
+    let changed = false;
+    Object.entries(predictions).forEach(([mn, p]) => {
+      const activeId1 = `m${competition.id}_${mn}_s1`;
+      const activeId2 = `m${competition.id}_${mn}_s2`;
+      if (document.activeElement?.id !== activeId1 && next[`${mn}_s1`] !== String(p?.score1 ?? '')) {
+        next[`${mn}_s1`] = String(p?.score1 ?? '');
+        changed = true;
+      }
+      if (document.activeElement?.id !== activeId2 && next[`${mn}_s2`] !== String(p?.score2 ?? '')) {
+        next[`${mn}_s2`] = String(p?.score2 ?? '');
+        changed = true;
+      }
+    });
+    // Also handle cases where a prediction is deleted in DB
+    Object.keys(next).forEach(key => {
+      const [mn, type] = key.split('_');
+      if (!predictions[mn]) {
+        const activeId = `m${competition.id}_${mn}_${type}`;
+        if (document.activeElement?.id !== activeId && next[key] !== '') {
+          next[key] = '';
+          changed = true;
+        }
+      }
+    });
+    if (changed) {
+      setLocalPreds(next);
+    }
+  }, [predictions, competition.id]);
   const [selectedPhase, setSelectedPhase] = useState(null);
   const [userTZ, setUserTZ] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [lockedDays, setLockedDays] = useState({});
@@ -75,6 +107,7 @@ export default function MatchList() {
   const firstUpcomingRef = useRef(null);
   const scrollDone = useRef(false);
   const activeTabRef = useRef(null);
+  const lastPlayedRef = useRef(null);
 
   const isWC = competition.id === 'wc2026';
   const fbPath = competition.firebasePath;
@@ -109,7 +142,26 @@ export default function MatchList() {
   }, [rawMatches, isWC]);
 
   const phases = competition.phases;
-  const activePhase = (selectedPhase && phases.includes(selectedPhase)) ? selectedPhase : phases[0];
+  const defaultPhase = useMemo(() => {
+    for (const phase of phases) {
+      const phaseMatches = matches.filter(m => m.stage === phase);
+      if (phaseMatches.length === 0) continue;
+
+      const allFinished = phaseMatches.every(m => {
+        const isDbFinished = liveMatches[`match_${m.matchNumber}`]?.status === 'finished';
+        const matchKickoff = new Date(`${m.date}T${m.utc}:00Z`).getTime();
+        const isTimeFinished = Date.now() >= matchKickoff + 130 * 60 * 1000;
+        return isDbFinished || isTimeFinished;
+      });
+
+      if (!allFinished) {
+        return phase;
+      }
+    }
+    return phases[phases.length - 1] || phases[0];
+  }, [matches, liveMatches, phases]);
+
+  const activePhase = (selectedPhase && phases.includes(selectedPhase)) ? selectedPhase : defaultPhase;
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -151,6 +203,16 @@ export default function MatchList() {
     }
   }, [activePhase]);
 
+  // Scroll to last played match when Played Matches is expanded
+  useEffect(() => {
+    if (showPlayed && lastPlayedRef.current) {
+      const timer = setTimeout(() => {
+        lastPlayedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [showPlayed]);
+
   const locale = lang === 'hr' ? 'hr-HR' : 'en-US';
   const calcPts = isWC ? calculatePoints : calculatePLPoints;
   const fmtTime = isWC ? formatMatchTime : formatPLMatchTime;
@@ -177,9 +239,43 @@ export default function MatchList() {
       return;
     }
 
+    const val1 = parseInt(score1, 10);
+    const val2 = parseInt(score2, 10);
+    const isDraw = val1 === val2;
+
+    // Check if prediction already had a qualifier
+    let currentQualifier = predictions[matchNumber]?.qualifier || null;
+    if (!isDraw) {
+      // If it is not a draw, remove any selected qualifier
+      currentQualifier = null;
+    }
+
     setSaving(p => ({ ...p, [matchNumber]: true }));
-    try { await saveUserPredictionExternal(database, fbPath, currentUser.uid, matchNumber, score1, score2); }
-    catch (e) { console.error(e); }
+    try {
+      await set(ref(database, `${fbPath}/users/${currentUser.uid}/predictions/${matchNumber}`), {
+        score1: val1,
+        score2: val2,
+        timestamp: Date.now(),
+        ...(currentQualifier ? { qualifier: currentQualifier } : {})
+      });
+    } catch (e) { console.error(e); }
+    finally { setSaving(p => ({ ...p, [matchNumber]: false })); }
+  };
+
+  const handleSelectQualifier = async (matchNumber, qualifier) => {
+    const match = matches.find(m => m.matchNumber === matchNumber);
+    if (!match) return;
+    if (!isAdmin && hasMatchStarted(match)) return;
+    if (isWC) { if (!isAdmin && lockedMatches[matchNumber]) return; }
+    else { const fmt = fmtTime(match.date, match.utc, userTZ, locale); if (!isAdmin && lockedDays[fmt.dateKey]) return; }
+
+    const pred = predictions[matchNumber];
+    if (!pred || pred.score1 === undefined || pred.score1 !== pred.score2) return;
+
+    setSaving(p => ({ ...p, [matchNumber]: true }));
+    try {
+      await set(ref(database, `${fbPath}/users/${currentUser.uid}/predictions/${matchNumber}/qualifier`), qualifier);
+    } catch (e) { console.error(e); }
     finally { setSaving(p => ({ ...p, [matchNumber]: false })); }
   };
 
@@ -241,8 +337,9 @@ export default function MatchList() {
   const renderMatch = (match, dk, dimmed) => {
     const pred = predictions[match.matchNumber];
     const actual = liveMatches[`match_${match.matchNumber}`];
-    const pts = actual?.status === 'finished' ? calcPts(pred, actual) : 0;
     const started = hasMatchStarted(match);
+    const isKnockout = match.stage !== 'Group Stage';
+    const pts = actual?.status === 'finished' ? calcPts(pred, actual, match) : 0;
     const editable = isMatchEditable(match, dk);
     const matchLocked = isMatchLocked(match, dk);
     const isFinished = actual?.status === 'finished';
@@ -250,8 +347,27 @@ export default function MatchList() {
     const round = match._groupRound || 0;
     const rc = (isWC && round >= 1 && round <= 3) ? ROUND_COLORS[round] : null;
 
+    const isLastPlayed = playedMatches.length > 0 && match.matchNumber === playedMatches[playedMatches.length - 1].matchNumber;
+
+    let progressedTeamName = null;
+    if (isKnockout && actual && actual.score1 === actual.score2 && actual.status === 'finished') {
+      const winnerKey = actual.winner || actual.penaltyWinner;
+      if (winnerKey) {
+        if (winnerKey === 'team1' || winnerKey === match.team1 || (rawMatchesRaw && winnerKey === rawMatchesRaw.find(x => x.matchNumber === match.matchNumber)?.team1)) {
+          progressedTeamName = match.team1;
+        } else if (winnerKey === 'team2' || winnerKey === match.team2 || (rawMatchesRaw && winnerKey === rawMatchesRaw.find(x => x.matchNumber === match.matchNumber)?.team2)) {
+          progressedTeamName = match.team2;
+        } else {
+          progressedTeamName = winnerKey;
+        }
+      }
+    }
+
     return (
-      <div key={match.matchNumber} className="glass-card match-card" style={{
+      <div key={match.matchNumber}
+        ref={isLastPlayed ? lastPlayedRef : null}
+        className="glass-card match-card"
+        style={{
         ...(rc ? { borderLeft: `3px solid ${rc.border}`, background: rc.bg } : {}),
         ...(isLive ? { borderLeft: '3px solid rgba(255,184,0,0.6)', background: 'rgba(255,184,0,0.06)' } : {}),
         ...(dimmed ? { opacity: 0.5, filter: 'saturate(0.4)' } : {}),
@@ -278,16 +394,28 @@ export default function MatchList() {
               <span className="prediction-label">{t('prediction')}{!editable && <span style={{ marginLeft: '4px' }}>{started ? '⏰' : '🔒'}</span>}</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <div className="prediction-inputs">
-                  <input type="number" className="input-glass score-input" min="0" defaultValue={pred?.score1 ?? ''} disabled={!editable}
-                    key={`s1_${match.matchNumber}_${pred?.score1 ?? ''}`}
+                  <input type="number" className="input-glass score-input" min="0"
+                    value={localPreds[`${match.matchNumber}_s1`] ?? ''}
+                    disabled={!editable}
                     style={!editable ? { opacity: 0.6, cursor: 'not-allowed' } : {}}
-                    onBlur={e => handlePredict(match.matchNumber, e.target.value, document.getElementById(`m${competition.id}_${match.matchNumber}_s2`).value)}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setLocalPreds(prev => ({ ...prev, [`${match.matchNumber}_s1`]: val }));
+                      const val2 = localPreds[`${match.matchNumber}_s2`] ?? '';
+                      handlePredict(match.matchNumber, val, val2);
+                    }}
                     id={`m${competition.id}_${match.matchNumber}_s1`} />
                   <span className="score-dash">-</span>
-                  <input type="number" className="input-glass score-input" min="0" defaultValue={pred?.score2 ?? ''} disabled={!editable}
-                    key={`s2_${match.matchNumber}_${pred?.score2 ?? ''}`}
+                  <input type="number" className="input-glass score-input" min="0"
+                    value={localPreds[`${match.matchNumber}_s2`] ?? ''}
+                    disabled={!editable}
                     style={!editable ? { opacity: 0.6, cursor: 'not-allowed' } : {}}
-                    onBlur={e => handlePredict(match.matchNumber, document.getElementById(`m${competition.id}_${match.matchNumber}_s1`).value, e.target.value)}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setLocalPreds(prev => ({ ...prev, [`${match.matchNumber}_s2`]: val }));
+                      const val1 = localPreds[`${match.matchNumber}_s1`] ?? '';
+                      handlePredict(match.matchNumber, val1, val);
+                    }}
                     id={`m${competition.id}_${match.matchNumber}_s2`} />
                 </div>
                 {/* Lock button inline with prediction */}
@@ -312,11 +440,99 @@ export default function MatchList() {
               <div className={`result-box ${pts === 3 ? 'exact' : pts === 1 ? 'correct' : ''}`}>
                 <div className="result-label">{t('result')}</div>
                 <div className="result-score">{actual.score1} - {actual.score2}</div>
+                {progressedTeamName && (
+                  <div style={{
+                    fontSize: '0.62rem',
+                    fontWeight: 700,
+                    color: 'rgba(255, 255, 255, 0.75)',
+                    marginTop: '2px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.2px'
+                  }}>
+                    {lang === 'hr' ? `prolaz: ${tt(progressedTeamName)}` : `${tt(progressedTeamName)} progressed`}
+                  </div>
+                )}
                 {actual.status === 'finished' && <div className={`result-pts ${pts === 3 ? 'exact' : pts === 1 ? 'correct' : 'wrong'}`}>+{pts} {t('pts')}</div>}
               </div>
             )}
           </div>
         </div>
+         {isKnockout && pred && pred.score1 !== undefined && pred.score1 === pred.score2 && (
+          <div className="qualifier-picker-container" style={{
+            borderTop: '1px solid var(--glass-border)',
+            marginTop: '8px',
+            paddingTop: '8px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '6px',
+            width: '100%'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.72rem', color: '#FFB800', fontWeight: 600 }}>
+              <span>🏆 {lang === 'hr' ? 'Tko prolazi dalje?' : 'Who will progress?'}</span>
+              <span className="tooltip-icon" title={lang === 'hr' ? 'Točan odabir tima koji prolazi nakon produžetaka ili penala donosi +1 dodatni bod.' : 'Correctly picking the team that advances after extra time or penalties awards +1 bonus point.'} style={{
+                cursor: 'pointer', background: 'rgba(255,184,0,0.12)', color: '#FFB800',
+                borderRadius: '50%', width: '14px', height: '14px',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '0.6rem', fontWeight: 700
+              }}>?</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontWeight: 'normal', marginLeft: '4px' }}>
+                (+1 {t('pts')})
+              </span>
+            </div>
+            {!pred.qualifier && (
+              <div style={{
+                fontSize: '0.7rem',
+                color: '#ff9900',
+                background: 'rgba(255,153,0,0.06)',
+                border: '1px solid rgba(255,153,0,0.2)',
+                padding: '6px 10px',
+                borderRadius: '6px',
+                marginBottom: '4px',
+                textAlign: 'center',
+                fontWeight: 500,
+                width: '100%',
+                boxSizing: 'border-box'
+              }}>
+                📌 {lang === 'hr'
+                  ? 'Napomena: Budući da ste prognozirali neriješeno, obavezno odaberite ekipu koja prolazi dalje za dodatni bod!'
+                  : 'Notice: Since you predicted a draw, make sure to select the team to progress to qualify for the bonus point!'}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '8px', width: '100%', justifyContent: 'center' }}>
+              <button 
+                disabled={!editable}
+                onClick={() => handleSelectQualifier(match.matchNumber, match.team1)}
+                style={{
+                  padding: '6px 12px', fontSize: '0.75rem', borderRadius: '6px',
+                  cursor: editable ? 'pointer' : 'not-allowed',
+                  background: pred.qualifier === match.team1 ? 'rgba(0,255,136,0.12)' : 'rgba(255,255,255,0.03)',
+                  color: pred.qualifier === match.team1 ? 'var(--primary)' : 'var(--text-main)',
+                  border: `1px solid ${pred.qualifier === match.team1 ? 'rgba(0,255,136,0.4)' : 'rgba(255,255,255,0.08)'}`,
+                  fontWeight: 600, flex: 1, maxWidth: '160px', textAlign: 'center',
+                  transition: 'all 0.2s', opacity: !editable && pred.qualifier !== match.team1 ? 0.5 : 1
+                }}
+              >
+                {isWC ? tt(match.team1) : match.team1}
+              </button>
+              <button 
+                disabled={!editable}
+                onClick={() => handleSelectQualifier(match.matchNumber, match.team2)}
+                style={{
+                  padding: '6px 12px', fontSize: '0.75rem', borderRadius: '6px',
+                  cursor: editable ? 'pointer' : 'not-allowed',
+                  background: pred.qualifier === match.team2 ? 'rgba(0,255,136,0.12)' : 'rgba(255,255,255,0.03)',
+                  color: pred.qualifier === match.team2 ? 'var(--primary)' : 'var(--text-main)',
+                  border: `1px solid ${pred.qualifier === match.team2 ? 'rgba(0,255,136,0.4)' : 'rgba(255,255,255,0.08)'}`,
+                  fontWeight: 600, flex: 1, maxWidth: '160px', textAlign: 'center',
+                  transition: 'all 0.2s', opacity: !editable && pred.qualifier !== match.team2 ? 0.5 : 1
+                }}
+              >
+                {isWC ? tt(match.team2) : match.team2}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   };

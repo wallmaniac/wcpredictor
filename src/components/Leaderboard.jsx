@@ -10,20 +10,24 @@ import { PL_2526_MATCHES, calculatePLPoints, formatPLMatchTime } from '../utils/
 import { recalculateAllPoints, syncLiveScores } from '../services/liveScoreService';
 
 // External helper to satisfy React Compiler purity check regarding Date.now()
-async function saveAdminPredictionLeaderboardExternal(database, fbPath, uid, mn, s1, s2) {
-  await set(ref(database, `${fbPath}/users/${uid}/predictions/${mn}`), {
+async function saveAdminPredictionLeaderboardExternal(database, fbPath, uid, mn, s1, s2, qualifier) {
+  const data = {
     score1: parseInt(s1, 10),
     score2: parseInt(s2, 10),
     timestamp: Date.now(),
     editedByAdmin: true
-  });
+  };
+  if (qualifier) {
+    data.qualifier = qualifier;
+  }
+  await set(ref(database, `${fbPath}/users/${uid}/predictions/${mn}`), data);
 }
 
 // Static start dates to prevent recreating Date objects on every render pass
 const WC_START_DATE = new Date('2026-06-11T19:00:00Z');
 const PL_START_DATE = new Date('2025-08-16T00:00:00Z');
 export default function Leaderboard() {
-  const { t, tt, lang } = useLanguage();
+  const { t, tt, ts, lang } = useLanguage();
   const { currentUser, isAdmin } = useAuth();
   const { competition } = useCompetition();
   const [userTZ, setUserTZ] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -45,6 +49,9 @@ export default function Leaderboard() {
   const [viewingUserLocks, setViewingUserLocks] = useState({});
   const [viewingGlobalPicks, setViewingGlobalPicks] = useState(null);
   const [viewingGlobalPickResults, setViewingGlobalPickResults] = useState(null);
+  const [stats, setStats] = useState({ scorers: [], assists: [], cleanSheets: [] });
+  const [globalResults, setGlobalResults] = useState({});
+  const [showSimulated, setShowSimulated] = useState(false);
   const [matchResults, setMatchResults] = useState({});
   const [expanded, setExpanded] = useState(false); // horizontal expand
   const [activeTab, setActiveTab] = useState('standings');
@@ -56,6 +63,7 @@ export default function Leaderboard() {
   const [recalcMsg, setRecalcMsg] = useState(null);
   const [modalTab, setModalTab] = useState('matches'); // 'matches' or 'global'
   const modalScrollContainerRef = useRef(null);
+  const [selectedLiveMatchNumber, setSelectedLiveMatchNumber] = useState(null);
 
   useEffect(() => {
     if (viewingUser && !loadingPreds && modalTab === 'matches') {
@@ -87,6 +95,51 @@ export default function Leaderboard() {
   }, [matchesRaw, matchResults, isWC]);
   const calcPts = isWC ? calculatePoints : calculatePLPoints;
 
+  const defaultMatchNumber = useMemo(() => {
+    // 1. Find live match
+    const live = matches.filter(m => {
+      const actual = matchResults[`match_${m.matchNumber}`];
+      const kickoff = new Date(`${m.date}T${m.utc}:00Z`).getTime();
+      const started = now >= kickoff;
+      return actual?.status === 'live' || (started && (now - kickoff < 130 * 60 * 1000));
+    });
+    if (live.length > 0) return live[0].matchNumber;
+
+    // 2. Find next upcoming match
+    const upcoming = matches.filter(m => {
+      const actual = matchResults[`match_${m.matchNumber}`];
+      const isFinished = actual?.status === 'finished';
+      const kickoff = new Date(`${m.date}T${m.utc}:00Z`).getTime();
+      return !isFinished && kickoff > now;
+    });
+    if (upcoming.length > 0) {
+      upcoming.sort((a, b) => {
+        const kickoffA = new Date(`${a.date}T${a.utc}:00Z`).getTime();
+        const kickoffB = new Date(`${b.date}T${b.utc}:00Z`).getTime();
+        return kickoffA - kickoffB;
+      });
+      return upcoming[0].matchNumber;
+    }
+
+    // 3. Fallback: last finished match
+    const finished = matches.filter(m => matchResults[`match_${m.matchNumber}`]?.status === 'finished');
+    if (finished.length > 0) {
+      finished.sort((a, b) => {
+        const kickoffA = new Date(`${a.date}T${a.utc}:00Z`).getTime();
+        const kickoffB = new Date(`${b.date}T${b.utc}:00Z`).getTime();
+        return kickoffB - kickoffA; // newest first
+      });
+      return finished[0].matchNumber;
+    }
+
+    return matches[0]?.matchNumber || 1;
+  }, [matches, matchResults, now]);
+
+  const currentLiveMatchNumber = selectedLiveMatchNumber !== null ? selectedLiveMatchNumber : defaultMatchNumber;
+  const selectedMatch = useMemo(() => {
+    return matches.find(m => m.matchNumber === currentLiveMatchNumber) || matches[0];
+  }, [matches, currentLiveMatchNumber]);
+
   useEffect(() => {
     const u1 = onValue(ref(database, 'wc2026/users'), snap => {
       if (!snap.exists()) { setUsers([]); return; }
@@ -97,6 +150,8 @@ export default function Leaderboard() {
         exact: isWC ? (u.exactScores || 0) : 0, correct: isWC ? (u.correctResults || 0) : 0,
         matchPoints: isWC ? (u.matchPoints || 0) : 0,
         globalPickPoints: isWC ? (u.globalPickPoints || 0) : 0,
+        globalPicks: u.globalPicks || {},
+        globalPicksLocked: u.globalPicksLocked === true,
         hidden: u.hidden === true,
       })));
     });
@@ -114,12 +169,16 @@ export default function Leaderboard() {
             correct: c.correctResults || 0,
             matchPoints: c.matchPoints || 0,
             globalPickPoints: c.globalPickPoints || 0,
+            globalPicks: c.globalPicks || {},
+            globalPicksLocked: c.globalPicksLocked === true,
           } : u;
         }));
       });
     }
     const u2 = onValue(ref(database, 'wc2026/leagues'), s => setLeagues(s.exists() ? s.val() : {}));
     const u5 = onValue(ref(database, `${fbPath}/match_results`), s => setMatchResults(s.exists() ? s.val() : {}));
+    const uStats = onValue(ref(database, `${fbPath}/statistics`), s => setStats(s.exists() ? s.val() : { scorers: [], assists: [], cleanSheets: [] }));
+    const uGlobResults = onValue(ref(database, `${fbPath}/metadata/globalResults`), s => setGlobalResults(s.exists() ? s.val() : {}));
     let u3 = () => {};
     let u4 = () => {};
     let u4b = () => {};
@@ -131,18 +190,169 @@ export default function Leaderboard() {
     }
     const h = (e) => setSelectedLeague(e.detail);
     window.addEventListener('select-league', h);
-    return () => { u1(); u1b(); u2(); u3(); u4(); u4b(); u5(); window.removeEventListener('select-league', h); };
+    return () => { u1(); u1b(); u2(); u3(); u4(); u4b(); u5(); uStats(); uGlobResults(); window.removeEventListener('select-league', h); };
   }, [fbPath, isWC, currentUser]);
 
   const filtered = useMemo(() => {
     const visibleUsers = users.filter(u => !u.hidden || u.uid === currentUser?.uid);
-    const sorted = [...visibleUsers].sort((a, b) => b.points !== a.points ? b.points - a.points : b.exact - a.exact);
+    
+    let mapped = visibleUsers;
+    if (showSimulated && isWC) {
+      // Calculate clean sheets in real-time
+      const teamCleanSheets = {};
+      const matchesList = isWC ? ALL_MATCHES : PL_2526_MATCHES;
+      Object.entries(matchResults).forEach(([mId, res]) => {
+        if (res && res.isPlayed && res.status === 'finished') {
+          const mNum = parseInt(mId.replace('match_', ''), 10);
+          const matchObj = matchesList.find(m => m.matchNumber === mNum);
+          if (matchObj) {
+            const s1 = res.score1;
+            const s2 = res.score2;
+            if (s2 === 0) {
+              teamCleanSheets[matchObj.team1] = (teamCleanSheets[matchObj.team1] || 0) + 1;
+            }
+            if (s1 === 0) {
+              teamCleanSheets[matchObj.team2] = (teamCleanSheets[matchObj.team2] || 0) + 1;
+            }
+          }
+        }
+      });
+
+      const getWinners = (list) => {
+        const arr = Array.isArray(list) ? list : Object.values(list || {});
+        const valid = arr.filter(p => p && p.name && (p.count || 0) > 0);
+        if (valid.length === 0) return [];
+        const max = Math.max(...valid.map(p => p.count));
+        return valid.filter(p => p.count === max).map(p => p.name);
+      };
+
+      const getGKWinners = (list) => {
+        const arr = Array.isArray(list) ? list : Object.values(list || {});
+        // Update clean sheets count dynamically based on teamCleanSheets
+        const updated = arr.map(p => ({
+          ...p,
+          count: p ? (teamCleanSheets[p.team] || 0) : 0
+        }));
+        const valid = updated.filter(p => p && p.name && (p.count || 0) > 0);
+        if (valid.length === 0) return [];
+        const max = Math.max(...valid.map(p => p.count));
+        return valid.filter(p => p.count === max).map(p => p.name);
+      };
+
+      const scorerWinners = getWinners(stats.scorers);
+      const assistWinners = getWinners(stats.assists);
+      const gkWinners = getGKWinners(stats.cleanSheets);
+
+      const levenshteinDistance = (a, b) => {
+        const tmp = [];
+        let i, j;
+        for (i = 0; i <= a.length; i++) {
+          tmp.push([i]);
+        }
+        for (j = 0; j <= b.length; j++) {
+          tmp[0][j] = j;
+        }
+        for (i = 1; i <= a.length; i++) {
+          for (j = 1; j <= b.length; j++) {
+            tmp[i][j] = Math.min(
+              tmp[i - 1][j] + 1,
+              tmp[i][j - 1] + 1,
+              tmp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+            );
+          }
+        }
+        return tmp[a.length][b.length];
+      };
+
+      const simplify = (str) => {
+        if (!str) return '';
+        return str.toString().toLowerCase()
+          .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^a-z0-9]/g, "").trim();
+      };
+
+      const isMatch = (pick, actual) => {
+        if (!pick || !actual) return false;
+        const p = simplify(pick);
+        const a = simplify(actual);
+        if (p === a) return true;
+        
+        // 1. Levenshtein edit distance
+        const dist = levenshteinDistance(p, a);
+        const minLen = Math.min(p.length, a.length);
+        const threshold = minLen < 5 ? 1 : minLen < 8 ? 2 : 3;
+        if (dist <= threshold) return true;
+        
+        // 2. Word-by-word comparison
+        const getWords = (name) => {
+          return name.toString().toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .split(/[^a-z0-9]/)
+            .filter(w => w.length > 0);
+        };
+        
+        const wordsA = getWords(pick);
+        const wordsB = getWords(actual);
+        
+        if (wordsA.length === 0 || wordsB.length === 0) return false;
+        
+        const isWordMatch = (w1, w2) => {
+          if (w1 === w2) return true;
+          if (w1.length === 1 && w2.startsWith(w1)) return true;
+          if (w2.length === 1 && w1.startsWith(w2)) return true;
+          if (w1.length >= 3 && w2.length >= 3) {
+            if (w1.includes(w2) || w2.includes(w1)) return true;
+            if (levenshteinDistance(w1, w2) <= 1) return true;
+          }
+          return false;
+        };
+        
+        if (wordsA.length >= 2 && wordsB.length >= 2) {
+          const shorter = wordsA.length <= wordsB.length ? wordsA : wordsB;
+          const longer = wordsA.length <= wordsB.length ? wordsB : wordsA;
+          return shorter.every(sw => longer.some(lw => isWordMatch(sw, lw)));
+        } else {
+          const sw = wordsA.length === 1 ? wordsA[0] : wordsB[0];
+          const longerList = wordsA.length === 1 ? wordsB : wordsA;
+          return longerList.some(lw => isWordMatch(sw, lw));
+        }
+      };
+
+      mapped = visibleUsers.map(u => {
+        let simGP = 0;
+        const gp = u.globalPicks || {};
+        const isGPListLocked = u.globalPicksLocked === true || isAfterStart;
+        if (isGPListLocked) {
+          if (globalResults.champion && isMatch(gp.champion, globalResults.champion)) simGP += 10;
+          if (globalResults.secondPlace && isMatch(gp.secondPlace, globalResults.secondPlace)) simGP += 5;
+          if (globalResults.thirdPlace && isMatch(gp.thirdPlace, globalResults.thirdPlace)) simGP += 5;
+          if (scorerWinners.length > 0 && gp.topScorer && scorerWinners.some(w => isMatch(gp.topScorer, w))) simGP += 5;
+          const assistPick = gp.topHighlight || gp.topAssist;
+          if (assistWinners.length > 0 && assistPick && assistWinners.some(w => isMatch(assistPick, w))) simGP += 5;
+          if (gkWinners.length > 0 && gp.topGoalkeeper && gkWinners.some(w => isMatch(gp.topGoalkeeper, w))) simGP += 5;
+        }
+        return {
+          ...u,
+          simulatedPoints: u.matchPoints + simGP,
+          simulatedGlobalPoints: simGP
+        };
+      });
+    }
+
+    const sorted = [...mapped].sort((a, b) => {
+      const ptsA = showSimulated && isWC ? a.simulatedPoints : a.points;
+      const ptsB = showSimulated && isWC ? b.simulatedPoints : b.points;
+      if (ptsB !== ptsA) return ptsB - ptsA;
+      return b.exact - a.exact;
+    });
+
     if (selectedLeague !== 'all') {
       const league = leagues[selectedLeague];
       if (league?.members) return sorted.filter(u => Object.keys(league.members).includes(u.uid));
     }
     return sorted;
-  }, [users, currentUser?.uid, selectedLeague, leagues]);
+  }, [users, currentUser?.uid, selectedLeague, leagues, showSimulated, stats, globalResults, isWC, isAfterStart, matchResults]);
 
   const myLeagues = Object.entries(leagues).filter(([, l]) => l.members?.[currentUser?.uid] || isAdmin).sort((a, b) => (a[1].name || '').localeCompare(b[1].name || ''));
   const hasAnyLock = isWC ? Object.keys(myLockedMatches).length > 0 : Object.keys(myLockedDays).length > 0;
@@ -212,7 +422,7 @@ export default function Leaderboard() {
     setLoadingPreds(false);
   };
 
-  const handleAdminEditPred = async (uid, mn, s1, s2) => {
+  const handleAdminEditPred = async (uid, mn, s1, s2, qualifier) => {
     if (!isAdmin) return;
 
     const s1Empty = s1 === '' || s1 === null || s1 === undefined;
@@ -247,11 +457,34 @@ export default function Leaderboard() {
       return;
     }
 
+    const finalQualifier = qualifier !== undefined ? qualifier : (viewingPreds[mn]?.qualifier || null);
+
     // Both are filled, save
     try {
-      await saveAdminPredictionLeaderboardExternal(database, fbPath, uid, mn, s1, s2);
+      await saveAdminPredictionLeaderboardExternal(database, fbPath, uid, mn, s1, s2, finalQualifier);
       await recalculateAllPoints(competition.id);
-      setViewingPreds(p => ({ ...p, [mn]: { score1: parseInt(s1, 10), score2: parseInt(s2, 10), editedByAdmin: true } }));
+      setViewingPreds(p => ({ ...p, [mn]: { score1: parseInt(s1, 10), score2: parseInt(s2, 10), qualifier: finalQualifier, editedByAdmin: true } }));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAdminEditQualifier = async (uid, mn, qualifier) => {
+    if (!isAdmin) return;
+    const pred = viewingPreds[mn];
+    if (!pred || pred.score1 === undefined || pred.score2 === undefined || pred.score1 === '' || pred.score2 === '') return;
+
+    try {
+      await saveAdminPredictionLeaderboardExternal(database, fbPath, uid, mn, pred.score1, pred.score2, qualifier);
+      await recalculateAllPoints(competition.id);
+      setViewingPreds(p => ({
+        ...p,
+        [mn]: {
+          ...p[mn],
+          qualifier,
+          editedByAdmin: true
+        }
+      }));
     } catch (err) {
       console.error(err);
     }
@@ -297,16 +530,64 @@ export default function Leaderboard() {
     return finishedMatches.map(m => {
       const actual = matchResults[`match_${m.matchNumber}`];
       if (!actual) return null;
+      const resolvedMatchObj = matches.find(x => x.matchNumber === m.matchNumber);
+      const team1Resolved = resolvedMatchObj?.team1 || m.team1;
+      const team2Resolved = resolvedMatchObj?.team2 || m.team2;
+
       const exactUsers = [];
       Object.entries(allUserPreds).forEach(([uid, uData]) => {
         const pred = uData.predictions?.[m.matchNumber];
         if (pred && pred.score1 === actual.score1 && pred.score2 === actual.score2) {
-          exactUsers.push(users.find(u => u.uid === uid)?.name || uData.displayName || 'Unknown');
+          const userName = users.find(u => u.uid === uid)?.name || uData.displayName || 'Unknown';
+          
+          let missedQualifier = false;
+          let predictedQualifier = null;
+          let actualQualifierResolved = null;
+          
+          const isDraw = pred.score1 === pred.score2;
+          const isKnockout = m.stage !== 'Group Stage';
+          
+          if (isKnockout && isDraw) {
+            const actualWinner = actual.winner || actual.penaltyWinner;
+            let actualWinnerResolved = actualWinner;
+            if (actualWinner === 'team1' || actualWinner === m.team1) {
+              actualWinnerResolved = team1Resolved;
+            } else if (actualWinner === 'team2' || actualWinner === m.team2) {
+              actualWinnerResolved = team2Resolved;
+            } else if (actualWinner) {
+              if (actualWinner === m.team1) actualWinnerResolved = team1Resolved;
+              else if (actualWinner === m.team2) actualWinnerResolved = team2Resolved;
+            }
+            
+            if (actual.penaltyWinner) {
+              if (actual.penaltyWinner === m.team1) actualWinnerResolved = team1Resolved;
+              else if (actual.penaltyWinner === m.team2) actualWinnerResolved = team2Resolved;
+            }
+            
+            predictedQualifier = pred.qualifier;
+            let predictedQualifierResolved = predictedQualifier;
+            if (predictedQualifier === m.team1) predictedQualifierResolved = team1Resolved;
+            else if (predictedQualifier === m.team2) predictedQualifierResolved = team2Resolved;
+            
+            if (actualWinnerResolved && (!predictedQualifierResolved || predictedQualifierResolved !== actualWinnerResolved)) {
+              missedQualifier = true;
+            }
+            actualQualifierResolved = actualWinnerResolved;
+            predictedQualifier = predictedQualifierResolved;
+          }
+
+          exactUsers.push({
+            name: userName,
+            isKnockoutDraw: isKnockout && isDraw,
+            missedQualifier,
+            predictedQualifier,
+            actualQualifier: actualQualifierResolved
+          });
         }
       });
-      return exactUsers.length > 0 ? { match: m, actual, exactUsers } : null;
+      return exactUsers.length > 0 ? { match: resolvedMatchObj || m, actual, exactUsers } : null;
     }).filter(Boolean);
-  }, [allUserPreds, finishedMatches, matchResults, users]);
+  }, [allUserPreds, finishedMatches, matchResults, users, matches]);
 
   const liveOrNextMatchesData = useMemo(() => {
     // 1. Find all live matches (kickoff has passed, and started less than 130 minutes ago)
@@ -370,7 +651,7 @@ export default function Leaderboard() {
     const pred = viewingPreds[m.matchNumber];
     const actual = matchResults[`match_${m.matchNumber}`];
     const isFinished = actual?.status === 'finished';
-    const pts = isFinished ? calcPts(pred, actual) : 0;
+    const pts = isFinished ? calcPts(pred, actual, m) : 0;
     const isExact = pts === 3, isCorrect = pts === 1;
     const fmt = fmtTime(m.date, m.utc, userTZ, locale);
     const isToday = fmt.dateKey === todayKey;
@@ -425,7 +706,7 @@ export default function Leaderboard() {
                     }
                   }));
                 }}
-                onBlur={e => handleAdminEditPred(viewingUser.uid, m.matchNumber, e.target.value, document.getElementById(`adm_${viewingUser.uid}_${m.matchNumber}_s2`)?.value || '')}
+                onBlur={e => handleAdminEditPred(viewingUser.uid, m.matchNumber, e.target.value, pred?.score2 ?? '')}
                 id={`adm_${viewingUser.uid}_${m.matchNumber}_s1`} />
               <span style={{ color: 'var(--text-muted)' }}>-</span>
               <input type="number" min="0" value={pred?.score2 ?? ''} className="input-glass score-input"
@@ -441,8 +722,30 @@ export default function Leaderboard() {
                     }
                   }));
                 }}
-                onBlur={e => handleAdminEditPred(viewingUser.uid, m.matchNumber, document.getElementById(`adm_${viewingUser.uid}_${m.matchNumber}_s1`)?.value || '', e.target.value)}
+                onBlur={e => handleAdminEditPred(viewingUser.uid, m.matchNumber, pred?.score1 ?? '', e.target.value)}
                 id={`adm_${viewingUser.uid}_${m.matchNumber}_s2`} />
+              {isWC && m.stage !== 'Group Stage' && pred && pred.score1 !== undefined && pred.score1 === pred.score2 && pred.score1 !== '' && (
+                <select
+                  className="input-glass"
+                  value={pred.qualifier || ''}
+                  onChange={e => handleAdminEditQualifier(viewingUser.uid, m.matchNumber, e.target.value || null)}
+                  style={{ 
+                    fontSize: '0.72rem', 
+                    padding: '2px 4px', 
+                    marginLeft: '4px', 
+                    height: '24px', 
+                    color: pred.qualifier ? 'var(--primary)' : '#FFB800',
+                    border: `1px solid ${pred.qualifier ? 'rgba(0,255,136,0.3)' : 'rgba(255,184,0,0.3)'}`,
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    maxWidth: '100px'
+                  }}
+                >
+                  <option value="">{lang === 'hr' ? 'Prolaz?' : 'Progress?'}</option>
+                  <option value={m.team1}>{tt(m.team1)}</option>
+                  <option value={m.team2}>{tt(m.team2)}</option>
+                </select>
+              )}
               {pred && (pred.score1 !== undefined && pred.score2 !== undefined && pred.score1 !== '' && pred.score2 !== '') && (
                 <button onClick={async () => {
                   const confirmMsg = lang === 'hr' ? `⚠️ Izbrisati predviđanje za utakmicu #${m.matchNumber}?` : `⚠️ Delete prediction for match #${m.matchNumber}?`;
@@ -463,6 +766,11 @@ export default function Leaderboard() {
             }}>
               {isExact && '✅ '}{isCorrect && '☑️ '}{isFinished && !isExact && !isCorrect && '❌ '}
               {pred?.score1} - {pred?.score2}
+              {m.stage !== 'Group Stage' && pred?.score1 === pred?.score2 && pred?.qualifier && (
+                <span style={{ fontSize: '0.8rem', opacity: 0.8, marginLeft: '4px', fontStyle: 'italic', color: '#FFB800' }}>
+                  ({isWC ? tt(pred.qualifier) : pred.qualifier})
+                </span>
+              )}
             </span>
           )}
           {isFinished && (
@@ -583,12 +891,32 @@ export default function Leaderboard() {
     <div className="glass-card" style={{ padding: '20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', flexWrap: 'wrap', gap: '8px' }}>
         <h3>🏆 {t('leaderboard')}</h3>
-        {myLeagues.length > 0 && (
-          <select className="input-glass" value={selectedLeague} onChange={e => setSelectedLeague(e.target.value)} style={{ width: 'auto', padding: '5px 10px', fontSize: '0.85rem' }}>
-            {myLeagues.map(([id, l]) => <option key={id} value={id}>🏟️ {l.name}</option>)}
-            <option value="all">🌍 {t('allLeagues')}</option>
-          </select>
-        )}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {isWC && (
+            <button 
+              onClick={() => setShowSimulated(p => !p)} 
+              className={showSimulated ? "btn-primary" : "btn-outline"}
+              style={{
+                padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px',
+                background: showSimulated ? 'rgba(168,85,247,0.2)' : 'none',
+                color: showSimulated ? '#c084fc' : '#a855f7',
+                border: showSimulated ? '1px solid rgba(168,85,247,0.5)' : '1px solid rgba(168,85,247,0.25)',
+                fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
+                boxShadow: showSimulated ? '0 0 10px rgba(168,85,247,0.2)' : 'none'
+              }}
+            >
+              🔮 {showSimulated 
+                ? (lang === 'hr' ? 'Stvarna tablica' : 'Real Table') 
+                : (lang === 'hr' ? 'Simuliraj globalne' : 'Simulate Global')}
+            </button>
+          )}
+          {myLeagues.length > 0 && (
+            <select className="input-glass" value={selectedLeague} onChange={e => setSelectedLeague(e.target.value)} style={{ width: 'auto', padding: '5px 10px', fontSize: '0.85rem' }}>
+              {myLeagues.map(([id, l]) => <option key={id} value={id}>🏟️ {l.name}</option>)}
+              <option value="all">🌍 {t('allLeagues')}</option>
+            </select>
+          )}
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: '6px', marginBottom: '16px', width: '100%' }}>
@@ -616,6 +944,23 @@ export default function Leaderboard() {
       </div>
 
       {activeTab === 'standings' && (<>
+        {showSimulated && isWC && (
+          <div style={{ 
+            background: 'rgba(168,85,247,0.1)', 
+            border: '1px solid rgba(168,85,247,0.3)', 
+            padding: '10px 14px', 
+            borderRadius: '8px', 
+            marginBottom: '12px', 
+            fontSize: '0.82rem', 
+            color: '#d8b4fe',
+            lineHeight: 1.4
+          }}>
+            🔮 <b>{lang === 'hr' ? 'Simulirana tablica aktivna:' : 'Simulated Leaderboard Active:'}</b>{' '}
+            {lang === 'hr'
+              ? 'Bodovi iz globalnih prognoza su privremeno dodijeljeni na temelju trenutnih vodećih igrača na tablici statistike.'
+              : 'Global prediction points are temporarily awarded based on the current Player Stats leaders.'}
+          </div>
+        )}
         {!isAdmin && !hasAnyLock && (
           <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(255,184,0,0.06)', border: '1px solid rgba(255,184,0,0.15)', fontSize: '0.78rem', color: '#FFB800' }}>
             🔓 {isWC ? t('lockMatchHint') : t('lockDayHint')}
@@ -694,13 +1039,13 @@ export default function Leaderboard() {
                       {u.flag} {u.name}
                       {u.hidden && isAdmin && <span style={{ marginLeft: '6px', fontSize: '0.78rem', color: '#ff5555' }} title="Hidden from other users">👻</span>}
                     </td>
-                    <td style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem', color: 'var(--primary)' }}>
-                      {u.points}
+                    <td style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem', color: showSimulated && isWC ? '#c084fc' : 'var(--primary)' }}>
+                      {showSimulated && isWC ? u.simulatedPoints : u.points}
                     </td>
                     <td style={{ padding: '10px 8px', textAlign: 'center', color: '#00ff88', fontWeight: 600 }}>{u.exact}</td>
                     <td style={{ padding: '10px 8px', textAlign: 'center', color: '#FFB800', fontWeight: 600 }}>{u.correct || 0}</td>
-                    <td style={{ padding: '10px 8px', textAlign: 'center', fontSize: '0.82rem', fontWeight: 600, color: u.globalPickPoints > 0 ? '#a855f7' : 'var(--text-muted)', borderRadius: '0 8px 8px 0' }}>
-                      {u.globalPickPoints > 0 ? `+${u.globalPickPoints}` : '—'}
+                    <td style={{ padding: '10px 8px', textAlign: 'center', fontSize: '0.82rem', fontWeight: 600, color: (showSimulated && isWC ? u.simulatedGlobalPoints : u.globalPickPoints) > 0 ? (showSimulated ? '#c084fc' : '#a855f7') : 'var(--text-muted)', borderRadius: '0 8px 8px 0' }}>
+                      {(showSimulated && isWC ? u.simulatedGlobalPoints : u.globalPickPoints) > 0 ? `+${showSimulated && isWC ? u.simulatedGlobalPoints : u.globalPickPoints}` : '—'}
                     </td>
                   </tr>
                 );
@@ -731,9 +1076,52 @@ export default function Leaderboard() {
                     </div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '4px' }}>📅 {fmt.fullDate}</div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                      {exactUsers.map((name, j) => (
-                        <span key={j} style={{ background: 'rgba(0,255,136,0.1)', color: '#00ff88', padding: '2px 8px', borderRadius: '10px', fontSize: '0.72rem', fontWeight: 600 }}>✅ {name}</span>
-                      ))}
+                      {exactUsers.map((u, j) => {
+                        if (u.isKnockoutDraw) {
+                          if (u.missedQualifier) {
+                            const predictedTeam = u.predictedQualifier ? tt(u.predictedQualifier) : (lang === 'hr' ? 'bez prolaza' : 'no progress pick');
+                            const label = lang === 'hr' ? `prolaz: ${predictedTeam} ❌` : `progress: ${predictedTeam} ❌`;
+                            return (
+                              <span key={j} style={{ 
+                                background: 'rgba(255,184,0,0.1)', 
+                                color: '#FFB800', 
+                                padding: '2px 8px', 
+                                borderRadius: '10px', 
+                                fontSize: '0.72rem', 
+                                fontWeight: 600,
+                                border: '1px solid rgba(255,184,0,0.25)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}>
+                                ✅ {u.name} <span style={{ opacity: 0.8, fontSize: '0.65rem', fontWeight: 'normal' }}>({label})</span>
+                              </span>
+                            );
+                          } else {
+                            const predictedTeam = u.predictedQualifier ? tt(u.predictedQualifier) : '';
+                            const label = lang === 'hr' ? `prolaz: ${predictedTeam}` : `progress: ${predictedTeam}`;
+                            return (
+                              <span key={j} style={{ 
+                                background: 'rgba(0,255,136,0.15)', 
+                                color: '#00ff88', 
+                                padding: '2px 8px', 
+                                borderRadius: '10px', 
+                                fontSize: '0.72rem', 
+                                fontWeight: 600,
+                                border: '1px solid rgba(0,255,136,0.4)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}>
+                                ✅✅ {u.name} <span style={{ opacity: 0.85, fontSize: '0.65rem', fontWeight: 'normal', color: '#00ff88' }}>({label})</span>
+                              </span>
+                            );
+                          }
+                        }
+                        return (
+                          <span key={j} style={{ background: 'rgba(0,255,136,0.1)', color: '#00ff88', padding: '2px 8px', borderRadius: '10px', fontSize: '0.72rem', fontWeight: 600 }}>✅ {u.name}</span>
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -745,16 +1133,6 @@ export default function Leaderboard() {
 
       {/* Live Predictions Tab */}
       {activeTab === 'live_predictions' && (() => {
-        const { type, matches: featuredMatches } = liveOrNextMatchesData;
-
-        if (type === 'none' || featuredMatches.length === 0) {
-          return (
-            <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
-              {lang === 'hr' ? 'Nema utakmica koje su uživo ili sljedeće na rasporedu.' : 'No live or upcoming matches featured.'}
-            </div>
-          );
-        }
-
         if (Object.keys(allUserPreds).length === 0) {
           return (
             <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
@@ -763,122 +1141,210 @@ export default function Leaderboard() {
           );
         }
 
+        if (!selectedMatch) {
+          return (
+            <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+              {lang === 'hr' ? 'Nema dostupnih utakmica.' : 'No matches available.'}
+            </div>
+          );
+        }
+
+        const actual = matchResults[`match_${selectedMatch.matchNumber}`];
+        const kickoff = new Date(`${selectedMatch.date}T${selectedMatch.utc}:00Z`).getTime();
+        const started = now >= kickoff;
+        const isLive = actual?.status === 'live' || (started && !actual) || (started && actual?.status === 'live');
+        const isFinished = actual?.status === 'finished';
+        const fmt = fmtTime(selectedMatch.date, selectedMatch.utc, userTZ, locale);
+
+        // Group matches for select dropdown grouping (optgroup)
+        const groupedMatches = [];
+        const seenStages = new Set();
+        matches.forEach(m => {
+          const stageName = isWC ? ts(m.stage) : `${t('matchday') || 'Matchday'} ${m.matchday}`;
+          if (!seenStages.has(stageName)) {
+            seenStages.add(stageName);
+            groupedMatches.push({
+              stageName,
+              matches: matches.filter(x => (isWC ? ts(x.stage) : `${t('matchday') || 'Matchday'} ${x.matchday}`) === stageName)
+            });
+          }
+        });
+
+        const showPointsCol = started || isFinished;
+
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {featuredMatches.map(m => {
-              const actual = matchResults[`match_${m.matchNumber}`];
-              const isLive = type === 'live';
-              const fmt = fmtTime(m.date, m.utc, userTZ, locale);
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Match selector dropdown */}
+            <div style={{ marginBottom: '4px' }}>
+              <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '8px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                {lang === 'hr' ? 'Odaberi utakmicu za prognoze:' : 'Select match for predictions:'}
+              </label>
+              <div style={{ position: 'relative' }}>
+                <select 
+                  className="input-glass" 
+                  value={currentLiveMatchNumber} 
+                  onChange={e => setSelectedLiveMatchNumber(Number(e.target.value))}
+                  style={{ 
+                    width: '100%', 
+                    fontSize: '0.9rem', 
+                    padding: '12px 16px',
+                    borderRadius: '10px',
+                    border: '1px solid var(--glass-border)',
+                    boxShadow: 'var(--shadow-glass)',
+                  }}
+                >
+                  {groupedMatches.map(group => (
+                    <optgroup key={group.stageName} label={group.stageName}>
+                      {group.matches.map(m => {
+                        const mActual = matchResults[`match_${m.matchNumber}`];
+                        const mLive = mActual?.status === 'live' || (now >= new Date(`${m.date}T${m.utc}:00Z`).getTime() && mActual?.status !== 'finished');
+                        const mFinished = mActual?.status === 'finished';
+                        
+                        let statusIndicator = '';
+                        if (mLive) statusIndicator = '🔴 ';
+                        else if (mFinished) statusIndicator = '✅ ';
+                        
+                        const t1 = isWC ? tt(m.team1) : m.team1;
+                        const t2 = isWC ? tt(m.team2) : m.team2;
+                        const scoreStr = mFinished && mActual ? ` (${mActual.score1} - ${mActual.score2})` : '';
 
-              return (
-                <div key={m.matchNumber} className="glass-card" style={{ padding: '16px', border: isLive ? '1px solid rgba(255,184,0,0.3)' : '1px solid var(--glass-border)' }}>
-                  {/* Match Header */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
-                    <div>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>#{m.matchNumber} • {fmt.fullDate}</span>
-                      <h4 style={{ margin: '4px 0 0 0', fontSize: '1.1rem', fontWeight: 700, color: 'var(--primary)' }}>
-                        {isWC ? tt(m.team1) : m.team1} vs {isWC ? tt(m.team2) : m.team2}
-                      </h4>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      {isLive ? (
-                        <>
-                          <span style={{ background: 'rgba(255,50,50,0.15)', color: '#ff5555', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold', border: '1px solid rgba(255,50,50,0.3)' }}>
-                            🔴 LIVE {actual?.liveMinute ? `(${actual.liveMinute})` : ''}
-                          </span>
-                          <span style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#FFB800' }}>
-                            {actual?.score1 ?? 0} - {actual?.score2 ?? 0}
-                          </span>
-                        </>
-                      ) : (
-                        <span style={{ background: 'rgba(0,180,255,0.15)', color: '#00B4FF', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold', border: '1px solid rgba(0,180,255,0.3)' }}>
-                          ⏳ {lang === 'hr' ? 'SLJEDEĆA' : 'UPCOMING'}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                        return (
+                          <option key={m.matchNumber} value={m.matchNumber} style={{ color: '#fff', fontWeight: 'normal' }}>
+                            {statusIndicator}#{m.matchNumber} • {t1} vs {t2}{scoreStr}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+            </div>
 
-                  {/* Predictions List */}
-                  <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-                    <table style={{ width: '100%', minWidth: '100%', borderCollapse: 'separate', borderSpacing: '0 4px', fontSize: '0.82rem' }}>
-                      <thead>
-                        <tr style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
-                          <th style={{ textAlign: 'left', padding: '6px 8px' }}>{t('player')}</th>
-                          <th style={{ textAlign: 'center', padding: '6px 8px' }}>{t('prediction') || 'Prediction'}</th>
-                          {isLive && <th style={{ textAlign: 'center', padding: '6px 8px' }}>{lang === 'hr' ? 'Live bodovi' : 'Live points'}</th>}
-                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>{lang === 'hr' ? 'Status' : 'Status'}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filtered.map(u => {
-                          const isSelf = u.uid === currentUser?.uid;
-                          const pred = allUserPreds[u.uid]?.predictions?.[m.matchNumber];
-                          const targetLocks = allUserPreds[u.uid]?.[isWC ? 'lockedMatches' : 'lockedDays'] || {};
-                          const isTargetLocked = isWC ? !!targetLocks[m.matchNumber] : !!targetLocks[fmt.dateKey];
-                          const myLocks = isWC ? myLockedMatches : myLockedDays;
-                          const isMyLocked = isWC ? !!myLocks[m.matchNumber] : !!myLocks[fmt.dateKey];
-
-                          const canSee = isAdmin || isSelf || isLive || (isTargetLocked && isMyLocked);
-                          const hasPredicted = pred !== undefined && pred !== null;
-
-                          let predText = '—';
-                          let statusText = lang === 'hr' ? 'Nije zaključano' : 'Not locked';
-                          let statusColor = 'var(--text-muted)';
-                          let livePts = 0;
-
-                          if (isTargetLocked || isLive) {
-                            statusText = lang === 'hr' ? 'Zaključano' : 'Locked';
-                            statusColor = '#00ff88';
-                          }
-
-                          if (!hasPredicted) {
-                            predText = lang === 'hr' ? 'Bez prognoze' : 'No prediction';
-                            statusText = lang === 'hr' ? 'Nije prognozirano' : 'Not predicted';
-                            statusColor = 'rgba(255,50,50,0.5)';
-                          } else if (canSee) {
-                            predText = `${pred.score1} - ${pred.score2}`;
-                            if (isLive && actual) {
-                              livePts = calcPts(pred, actual);
-                            }
-                          } else {
-                            predText = '🔒';
-                            if (!isMyLocked) {
-                              statusText = lang === 'hr' ? 'Zaključajte za prikaz' : 'Lock yours to view';
-                              statusColor = '#FFB800';
-                            }
-                          }
-
-                          return (
-                            <tr key={u.uid} style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
-                              <td style={{ padding: '8px', fontWeight: 600 }}>
-                                {u.flag} {u.name} {isSelf && <span style={{ color: 'var(--primary)', fontSize: '0.7rem' }}>({lang === 'hr' ? 'Vi' : 'You'})</span>}
-                              </td>
-                              <td style={{ padding: '8px', textAlign: 'center', fontWeight: 'bold', fontSize: '0.9rem', color: canSee && hasPredicted ? 'var(--primary)' : 'var(--text-muted)' }}>
-                                {predText}
-                              </td>
-                              {isLive && (
-                                <td style={{ padding: '8px', textAlign: 'center', fontWeight: 'bold' }}>
-                                  {hasPredicted && canSee && livePts > 0 ? (
-                                    <span style={{ color: livePts === 3 ? '#00ff88' : '#FFB800', background: livePts === 3 ? 'rgba(0,255,136,0.1)' : 'rgba(255,184,0,0.08)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem' }}>
-                                      +{livePts} {t('pts')}
-                                    </span>
-                                  ) : (
-                                    <span style={{ color: 'var(--text-muted)' }}>0 {t('pts')}</span>
-                                  )}
-                                </td>
-                              )}
-                              <td style={{ padding: '8px', textAlign: 'right', color: statusColor, fontSize: '0.75rem', fontWeight: 600 }}>
-                                {statusText}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+            {/* Selected Match Card */}
+            <div className="glass-card" style={{ padding: '16px', border: isLive ? '1px solid rgba(255,184,0,0.3)' : (isFinished ? '1px solid rgba(0,255,136,0.2)' : '1px solid var(--glass-border)') }}>
+              {/* Match Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+                <div>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>#{selectedMatch.matchNumber} • {fmt.fullDate}</span>
+                  <h4 style={{ margin: '4px 0 0 0', fontSize: '1.1rem', fontWeight: 700, color: 'var(--primary)' }}>
+                    {isWC ? tt(selectedMatch.team1) : selectedMatch.team1} vs {isWC ? tt(selectedMatch.team2) : selectedMatch.team2}
+                  </h4>
                 </div>
-              );
-            })}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  {isLive && (
+                    <>
+                      <span style={{ background: 'rgba(255,50,50,0.15)', color: '#ff5555', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold', border: '1px solid rgba(255,50,50,0.3)' }}>
+                        🔴 LIVE {actual?.liveMinute ? `(${actual.liveMinute})` : ''}
+                      </span>
+                      <span style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#FFB800' }}>
+                        {actual?.score1 ?? 0} - {actual?.score2 ?? 0}
+                      </span>
+                    </>
+                  )}
+                  {isFinished && (
+                    <>
+                      <span style={{ background: 'rgba(0,255,136,0.15)', color: 'var(--primary)', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold', border: '1px solid rgba(0,255,136,0.3)' }}>
+                        ✅ {lang === 'hr' ? 'ZAVRŠENO' : 'FINISHED'}
+                      </span>
+                      <span style={{ fontSize: '1.4rem', fontWeight: 'bold', color: 'var(--primary)' }}>
+                        {actual?.score1 ?? 0} - {actual?.score2 ?? 0}
+                      </span>
+                    </>
+                  )}
+                  {!isLive && !isFinished && (
+                    <span style={{ background: 'rgba(0,180,255,0.15)', color: '#00B4FF', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold', border: '1px solid rgba(0,180,255,0.3)' }}>
+                      ⏳ {lang === 'hr' ? 'SLJEDEĆA' : 'UPCOMING'}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Predictions List */}
+              <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <table style={{ width: '100%', minWidth: '100%', borderCollapse: 'separate', borderSpacing: '0 4px', fontSize: '0.82rem' }}>
+                  <thead>
+                    <tr style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                      <th style={{ textAlign: 'left', padding: '6px 8px' }}>{t('player')}</th>
+                      <th style={{ textAlign: 'center', padding: '6px 8px' }}>{t('prediction') || 'Prediction'}</th>
+                      {showPointsCol && <th style={{ textAlign: 'center', padding: '6px 8px' }}>{lang === 'hr' ? 'Bodovi' : 'Points'}</th>}
+                      <th style={{ textAlign: 'right', padding: '6px 8px' }}>{lang === 'hr' ? 'Status' : 'Status'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map(u => {
+                      const isSelf = u.uid === currentUser?.uid;
+                      const pred = allUserPreds[u.uid]?.predictions?.[selectedMatch.matchNumber];
+                      const targetLocks = allUserPreds[u.uid]?.[isWC ? 'lockedMatches' : 'lockedDays'] || {};
+                      const isTargetLocked = isWC ? !!targetLocks[selectedMatch.matchNumber] : !!targetLocks[fmt.dateKey];
+                      const myLocks = isWC ? myLockedMatches : myLockedDays;
+                      const isMyLocked = isWC ? !!myLocks[selectedMatch.matchNumber] : !!myLocks[fmt.dateKey];
+
+                      const canSee = isAdmin || isSelf || started || isLive || isFinished || (isTargetLocked && isMyLocked);
+                      const hasPredicted = pred !== undefined && pred !== null;
+
+                      let predText = '—';
+                      let statusText = lang === 'hr' ? 'Nije zaključano' : 'Not locked';
+                      let statusColor = 'var(--text-muted)';
+                      let livePts = 0;
+
+                      if (isFinished) {
+                        statusText = lang === 'hr' ? 'Završeno' : 'Finished';
+                        statusColor = 'var(--text-muted)';
+                      } else if (isTargetLocked || isLive) {
+                        statusText = lang === 'hr' ? 'Zaključano' : 'Locked';
+                        statusColor = '#00ff88';
+                      }
+
+                      if (!hasPredicted) {
+                        predText = lang === 'hr' ? 'Bez prognoze' : 'No prediction';
+                        statusText = lang === 'hr' ? 'Nije prognozirano' : 'Not predicted';
+                        statusColor = 'rgba(255,50,50,0.5)';
+                      } else if (canSee) {
+                        let qText = '';
+                        if (selectedMatch.stage !== 'Group Stage' && pred.score1 === pred.score2 && pred.qualifier) {
+                          qText = ` (${isWC ? tt(pred.qualifier) : pred.qualifier})`;
+                        }
+                        predText = `${pred.score1} - ${pred.score2}${qText}`;
+                        if ((isLive || isFinished) && actual) {
+                          livePts = calcPts(pred, actual, selectedMatch);
+                        }
+                      } else {
+                        predText = '🔒';
+                        if (!isMyLocked) {
+                          statusText = lang === 'hr' ? 'Zaključajte za prikaz' : 'Lock yours to view';
+                          statusColor = '#FFB800';
+                        }
+                      }
+
+                      return (
+                        <tr key={u.uid} style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                          <td style={{ padding: '8px', fontWeight: 600 }}>
+                            {u.flag} {u.name} {isSelf && <span style={{ color: 'var(--primary)', fontSize: '0.7rem' }}>({lang === 'hr' ? 'Vi' : 'You'})</span>}
+                          </td>
+                          <td style={{ padding: '8px', textAlign: 'center', fontWeight: 'bold', fontSize: '0.9rem', color: canSee && hasPredicted ? 'var(--primary)' : 'var(--text-muted)' }}>
+                            {predText}
+                          </td>
+                          {showPointsCol && (
+                            <td style={{ padding: '8px', textAlign: 'center', fontWeight: 'bold' }}>
+                              {hasPredicted && canSee && livePts > 0 ? (
+                                <span style={{ color: livePts === 3 ? '#00ff88' : '#FFB800', background: livePts === 3 ? 'rgba(0,255,136,0.1)' : 'rgba(255,184,0,0.08)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem' }}>
+                                  +{livePts} {t('pts')}
+                                </span>
+                              ) : (
+                                <span style={{ color: 'var(--text-muted)' }}>0 {t('pts')}</span>
+                              )}
+                            </td>
+                          )}
+                          <td style={{ padding: '8px', textAlign: 'right', color: statusColor, fontSize: '0.75rem', fontWeight: 600 }}>
+                            {statusText}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         );
       })()}
